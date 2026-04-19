@@ -1,0 +1,11 @@
+/home/zzc/linux_test/RingKV/build/CMakeFiles/edit_cache.dir
+/home/zzc/linux_test/RingKV/build/CMakeFiles/rebuild_cache.dir
+/home/zzc/linux_test/RingKV/build/AeroIO/net/CMakeFiles/AeroIO_net.dir
+/home/zzc/linux_test/RingKV/build/AeroIO/net/CMakeFiles/edit_cache.dir
+/home/zzc/linux_test/RingKV/build/AeroIO/net/CMakeFiles/rebuild_cache.dir
+/home/zzc/linux_test/RingKV/build/AeroIO/net/http/CMakeFiles/AeroIO_Http.dir
+/home/zzc/linux_test/RingKV/build/AeroIO/net/http/CMakeFiles/edit_cache.dir
+/home/zzc/linux_test/RingKV/build/AeroIO/net/http/CMakeFiles/rebuild_cache.dir
+/home/zzc/linux_test/RingKV/build/src/CMakeFiles/RingKV.dir
+/home/zzc/linux_test/RingKV/build/src/CMakeFiles/edit_cache.dir
+/home/zzc/linux_test/RingKV/build/src/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,70 @@
+namespace QueryArchive;
+
+enum Role : byte { User = 0, AI = 1, System = 2 }
+
+table Message {
+  role: Role;
+  content: string;
+}
+
+table MessagePair {
+  pair_index: int;
+  user_msg: Message;
+  ai_msg: Message;
+}
+
+table SessionMeta {
+  session_id: string;
+  title: string;
+  model: string;
+  timestamp: ulong;
+}
+
+table Session {
+  meta_data: SessionMeta;
+  pairs: [MessagePair];
+}
+
+table SearchHit {
+  session_id: string;
+  matched_pair_indices: [int];
+}
+
+table SearchResponse {
+  hits: [SearchHit];
+  sessions: [Session];
+  took_ms: int;
+}
+
+table InitResponse {
+  sessions: [Session];
+}
+
+union AnyResponse {
+  InitResponse,
+  SearchResponse
+}
+
+table RootResponse {
+  payload: AnyResponse;
+}
+
+table InitRequest {
+  limit: int = 30;
+}
+
+table SearchRequest {
+  keyword: string;
+  limit: int = 30;
+}
+
+union AnyRequest {
+  InitRequest,
+  SearchRequest
+}
+
+table RootRequest {
+  payload: AnyRequest;
+}
+
+root_type RootResponse;

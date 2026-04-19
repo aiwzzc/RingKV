@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/libAeroIO_net.a CMakeFiles/AeroIO_net.dir/Acceptor.cc.o CMakeFiles/AeroIO_net.dir/Buffer.cc.o CMakeFiles/AeroIO_net.dir/EventLoop.cc.o CMakeFiles/AeroIO_net.dir/IoRequest.cc.o CMakeFiles/AeroIO_net.dir/PendingWrite.cc.o CMakeFiles/AeroIO_net.dir/Socket.cc.o CMakeFiles/AeroIO_net.dir/TcpConnection.cc.o CMakeFiles/AeroIO_net.dir/TcpServer.cc.o
+/usr/bin/ranlib ../../lib/libAeroIO_net.a

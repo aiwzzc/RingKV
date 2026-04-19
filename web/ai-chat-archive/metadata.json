@@ -1,0 +1,5 @@
+{
+  "name": "AI Chat Archive",
+  "description": "A modern web interface for searching and viewing AI chat logs, powered by a high-performance KV storage engine.",
+  "requestFramePermissions": []
+}
