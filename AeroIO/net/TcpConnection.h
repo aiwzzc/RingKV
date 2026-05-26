@@ -45,7 +45,7 @@ enum class ConnState {
 class TcpConnection : public std::enable_shared_from_this<TcpConnection> {
 
 public:
-    TcpConnection(EventLoop* loop, int socket, rkv::ServerContext* ctx);
+    TcpConnection(EventLoop* loop, int socket, PoolContext& ctx);
     ~TcpConnection();
 
     enum class StateE { kDisconnected, kConnecting, kConnected, kDisconnecting };
@@ -132,7 +132,7 @@ private:
     StateE state_;
     ConnState connState_;
     std::unique_ptr<Socket> socket_;
-    rkv::ServerContext* Serverctx_;
+    PoolContext Poolctx_;
     std::unique_ptr<IoRequest> read_req_;
     std::unique_ptr<CloseRequest> close_req_;
     

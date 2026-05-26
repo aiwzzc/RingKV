@@ -3,15 +3,17 @@
 #include "Acceptor.h"
 #include "PendingWrite.h"
 #include "TcpConnection.h"
-#include "src/engine.h"
-#include "src/server.h"
-#include "src/protocolhandler.h"
-#include "src/config.h"
+
+// #include "src/engine.h"
+// #include "src/server.h"
+// #include "src/protocolhandler.h"
+// #include "src/config.h"
+
+#include "Log/LogApi.h"
 
 #include <sys/eventfd.h>
 #include <cstring>
 #include <cstdio>
-#include <iostream>
 #include <stdio.h>
 #include <immintrin.h>
 
@@ -35,8 +37,8 @@ static thread_local EventLoop* t_loopInThisThread = nullptr;
 EventLoop* EventLoop::getEventLoopOfCurrentThread()
 { return t_loopInThisThread; }
 
-EventLoop::EventLoop(rkv::Ringengine* engine) : 
-    engine_(engine), wakeupfd_(createEventfd()), 
+EventLoop::EventLoop() : 
+    wakeupfd_(createEventfd()), 
     pending_functors_(std::make_unique<moodycamel::ConcurrentQueue<Functor>>()),
     fixed_fds_index_(3), aof_is_flushing_(false), aof_fsync_in_flight_(false), 
     aof_is_rewriting_(false), aof_file_offset_(0), temp_aof_file_offset_(0), 
@@ -194,7 +196,7 @@ void EventLoop::wakeup() {
     uint64_t one = 1;
     ssize_t n = ::write(this->wakeupfd_, &one, sizeof one);
     if(n != sizeof one) {
-        std::cerr << "Wakeup failed! errno: " << errno << std::endl;
+        LOG_FATAL("Wakeup failed! errno: {}", errno);
     }
 }
 
@@ -249,40 +251,40 @@ void EventLoop::appendAof(char* data, std::size_t len) {
 }
 
 void EventLoop::tryFlushAof() {
-    if(!rkv::Config::getInstance().aof_enabled_) return;
+    // if(!rkv::Config::getInstance().aof_enabled_) return;
 
-    if(this->aof_write_buffer_.readableBytes() == 0 || 
-        this->aof_is_flushing_ || this->aof_fd_ < 0) return;
+    // if(this->aof_write_buffer_.readableBytes() == 0 || 
+    //     this->aof_is_flushing_ || this->aof_fd_ < 0) return;
 
-    if(this->aof_flush_buffer_.readableBytes() == 0 &&
-        this->aof_write_buffer_.readableBytes() == 0) return;
+    // if(this->aof_flush_buffer_.readableBytes() == 0 &&
+    //     this->aof_write_buffer_.readableBytes() == 0) return;
 
-    if(this->aof_flush_buffer_.readableBytes() == 0) {
-        std::swap(this->aof_flush_buffer_, this->aof_write_buffer_);
+    // if(this->aof_flush_buffer_.readableBytes() == 0) {
+    //     std::swap(this->aof_flush_buffer_, this->aof_write_buffer_);
 
-    } else {
-        this->aof_flush_buffer_.append((char*)this->aof_write_buffer_.peek(), 
-            this->aof_write_buffer_.readableBytes());
-    }
+    // } else {
+    //     this->aof_flush_buffer_.append((char*)this->aof_write_buffer_.peek(), 
+    //         this->aof_write_buffer_.readableBytes());
+    // }
     
-    this->aof_write_buffer_.retrieveAll();
-    this->aof_is_flushing_ = true;
+    // this->aof_write_buffer_.retrieveAll();
+    // this->aof_is_flushing_ = true;
 
-    io_uring_sqe* sqe = io_uring_get_sqe(this->ring_);
-    if(!sqe) {
-        io_uring_submit(this->ring_);
-        sqe = io_uring_get_sqe(this->ring_);
-    }
+    // io_uring_sqe* sqe = io_uring_get_sqe(this->ring_);
+    // if(!sqe) {
+    //     io_uring_submit(this->ring_);
+    //     sqe = io_uring_get_sqe(this->ring_);
+    // }
 
-    io_uring_prep_write(sqe, 1, this->aof_flush_buffer_.peek(), 
-    this->aof_flush_buffer_.readableBytes(), this->aof_file_offset_);
-    sqe->flags |= IOSQE_FIXED_FILE;
-    io_uring_sqe_set_data(sqe, this->aof_req_.get());
+    // io_uring_prep_write(sqe, 1, this->aof_flush_buffer_.peek(), 
+    // this->aof_flush_buffer_.readableBytes(), this->aof_file_offset_);
+    // sqe->flags |= IOSQE_FIXED_FILE;
+    // io_uring_sqe_set_data(sqe, this->aof_req_.get());
 }
 
 void EventLoop::tryFsyncAof() {
     if(this->aof_fsync_in_flight_) {
-        std::cerr << "[Warning] Disk is too slow! A previous fsync is still in flight." << std::endl;
+        LOG_FATAL("[Warning] Disk is too slow! A previous fsync is still in flight");
         return;
     }
 
@@ -300,23 +302,23 @@ void EventLoop::tryFsyncAof() {
 }
 
 void EventLoop::startAofRewrite() {
-    if(this->aof_is_rewriting_) return;
+    // if(this->aof_is_rewriting_) return;
 
-    this->aof_is_rewriting_ = true;
-    this->aof_rewrite_bucket_cursor_ = 0;
+    // this->aof_is_rewriting_ = true;
+    // this->aof_rewrite_bucket_cursor_ = 0;
 
-    this->temp_aof_fd_ = ::open(this->temp_aof_path_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if(this->temp_aof_fd_ < 0) {
-        std::cerr << "Failed to open AOF file: " << this->temp_aof_path_ 
-                  << ", Error: " << strerror(errno) << std::endl;
+    // this->temp_aof_fd_ = ::open(this->temp_aof_path_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    // if(this->temp_aof_fd_ < 0) {
+    //     std::cerr << "Failed to open AOF file: " << this->temp_aof_path_ 
+    //               << ", Error: " << strerror(errno) << std::endl;
 
-        return;
-    }
+    //     return;
+    // }
 
-    auto& map = this->engine_->getUnderlyingMap();
-    map.max_load_factor(1000000.0);
+    // auto& map = this->engine_->getUnderlyingMap();
+    // map.max_load_factor(1000000.0);
 
-    doAofRewriteStep();
+    // doAofRewriteStep();
 }
 
 
@@ -372,28 +374,28 @@ void EventLoop::tryFlushTempAof() {
 }
 
 void EventLoop::finishAofRewrite() {
-    if(this->aof_is_rewriting_) return;
+    // if(this->aof_is_rewriting_) return;
 
-    auto& map = this->engine_->getUnderlyingMap();
-    map.max_load_factor(1.0);
-    map.rehash(0); // 强制执行一次rehash
+    // auto& map = this->engine_->getUnderlyingMap();
+    // map.max_load_factor(1.0);
+    // map.rehash(0); // 强制执行一次rehash
 
-    ::rename(this->temp_aof_path_.c_str(), this->aof_file_path_.c_str());
-    ::close(this->temp_aof_fd_);
+    // ::rename(this->temp_aof_path_.c_str(), this->aof_file_path_.c_str());
+    // ::close(this->temp_aof_fd_);
 
-    this->aof_fd_ = ::open(this->aof_file_path_.c_str(), O_WRONLY | O_CREAT, 0644);
-    if (this->aof_fd_ < 0) {
-        std::cerr << "Failed to open AOF file: " << this->aof_file_path_ 
-                  << ", Error: " << strerror(errno) << std::endl;
-    }
+    // this->aof_fd_ = ::open(this->aof_file_path_.c_str(), O_WRONLY | O_CREAT, 0644);
+    // if (this->aof_fd_ < 0) {
+    //     std::cerr << "Failed to open AOF file: " << this->aof_file_path_ 
+    //               << ", Error: " << strerror(errno) << std::endl;
+    // }
 
-    io_uring_register_files_update(this->ring_, 1, &this->aof_fd_, 1);
-    this->fixed_fds_[1] = this->aof_fd_;
+    // io_uring_register_files_update(this->ring_, 1, &this->aof_fd_, 1);
+    // this->fixed_fds_[1] = this->aof_fd_;
 
-    this->aof_file_offset_ = this->temp_aof_file_offset_;
-    this->temp_aof_file_offset_ = 0;
-    this->aof_rewrite_flush_buffer_.retrieveAll();
-    this->aof_rewrite_buffer_.retrieveAll();
+    // this->aof_file_offset_ = this->temp_aof_file_offset_;
+    // this->temp_aof_file_offset_ = 0;
+    // this->aof_rewrite_flush_buffer_.retrieveAll();
+    // this->aof_rewrite_buffer_.retrieveAll();
 }
 
 bool EventLoop::rdbIsSaving()
@@ -409,26 +411,26 @@ std::unordered_set<std::string>& EventLoop::rdbCowSavedKeys()
 { return this->rdb_cow_saved_keys_; }
 
 void EventLoop::startRdb() {
-    if(this->rdb_is_saving_) return;
+    // if(this->rdb_is_saving_) return;
 
-    this->rdb_fd_ = ::open(this->rdb_file_path_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (this->rdb_fd_ < 0) {
-        std::cerr << "Failed to open RDB file: " << this->rdb_file_path_ 
-                  << ", Error: " << strerror(errno) << std::endl;
+    // this->rdb_fd_ = ::open(this->rdb_file_path_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    // if (this->rdb_fd_ < 0) {
+    //     std::cerr << "Failed to open RDB file: " << this->rdb_file_path_ 
+    //               << ", Error: " << strerror(errno) << std::endl;
 
-        return;
-    }
+    //     return;
+    // }
 
-    io_uring_register_files_update(this->ring_, 2, &this->rdb_fd_, 1);
-    this->fixed_fds_[2] = this->rdb_fd_;
+    // io_uring_register_files_update(this->ring_, 2, &this->rdb_fd_, 1);
+    // this->fixed_fds_[2] = this->rdb_fd_;
 
-    this->rdb_is_saving_ = true;
-    this->rdb_cow_bucket_cursor_ = 0;
+    // this->rdb_is_saving_ = true;
+    // this->rdb_cow_bucket_cursor_ = 0;
 
-    auto& map = this->engine_->getUnderlyingMap();
-    map.max_load_factor(1000000.0);
+    // auto& map = this->engine_->getUnderlyingMap();
+    // map.max_load_factor(1000000.0);
 
-    doRdbWriteStep();
+    // doRdbWriteStep();
 }
 
 void EventLoop::doRdbWriteStep() {
@@ -517,68 +519,68 @@ void EventLoop::initReq() {
     this->rdbWrite_req_->setLoop(this);
     this->rdbWrite_req_->setType(IoType::RDB_WRITE);
 
-    if(!rkv::Config::getInstance().is_master_) {
-        this->handShake_req_ = std::make_unique<HandShakeRequest>();
-        this->handShake_req_->setLoop(this);
-        this->handShake_req_->setType(IoType::HANDSHAKE);
-    }
+    // if(!rkv::Config::getInstance().is_master_) {
+    //     this->handShake_req_ = std::make_unique<HandShakeRequest>();
+    //     this->handShake_req_->setLoop(this);
+    //     this->handShake_req_->setType(IoType::HANDSHAKE);
+    // }
 }
 
 void EventLoop::initAof() {
-    if(rkv::Config::getInstance().aof_enabled_) {
-        this->aof_fd_ = ::open(this->aof_file_path_.c_str(), O_WRONLY | O_CREAT, 0644);
-        if (this->aof_fd_ < 0) {
-            std::cerr << "Failed to open AOF file: " << this->aof_file_path_ 
-                    << ", Error: " << strerror(errno) << std::endl;
+    // if(rkv::Config::getInstance().aof_enabled_) {
+    //     this->aof_fd_ = ::open(this->aof_file_path_.c_str(), O_WRONLY | O_CREAT, 0644);
+    //     if (this->aof_fd_ < 0) {
+    //         std::cerr << "Failed to open AOF file: " << this->aof_file_path_ 
+    //                 << ", Error: " << strerror(errno) << std::endl;
 
-            return;
-        }
+    //         return;
+    //     }
 
-        io_uring_register_files_update(this->ring_, 1, &this->aof_fd_, 1);
-        this->fixed_fds_[1] = this->aof_fd_;
+    //     io_uring_register_files_update(this->ring_, 1, &this->aof_fd_, 1);
+    //     this->fixed_fds_[1] = this->aof_fd_;
 
-        if(rkv::Config::getInstance().aof_sync_type_ == rkv::AofSyncType::EVERYSEC) {
-            this->addTimer(1000, [this] () {
-                this->tryFsyncAof();
+    //     if(rkv::Config::getInstance().aof_sync_type_ == rkv::AofSyncType::EVERYSEC) {
+    //         this->addTimer(1000, [this] () {
+    //             this->tryFsyncAof();
 
-                this->addTimer(1000, [this] () {
-                    this->tryFsyncAof();
-                }, this->aof_timer_req_.get());
-            }, this->aof_timer_req_.get());
-        }
-    }
+    //             this->addTimer(1000, [this] () {
+    //                 this->tryFsyncAof();
+    //             }, this->aof_timer_req_.get());
+    //         }, this->aof_timer_req_.get());
+    //     }
+    // }
 }
 
 void EventLoop::initRdb() {
-    if(rkv::Config::getInstance().rdb_enabled_) {
-        this->addTimer(rkv::Config::getInstance().rdb_interval_ * 1000, [this] () {
-            this->startRdb();
+    // if(rkv::Config::getInstance().rdb_enabled_) {
+    //     this->addTimer(rkv::Config::getInstance().rdb_interval_ * 1000, [this] () {
+    //         this->startRdb();
 
-            this->addTimer(rkv::Config::getInstance().rdb_interval_ * 1000, [this] () {
-                this->startRdb();
-            }, this->rdb_timer_req_.get());
-        }, this->rdb_timer_req_.get());
-    }
+    //         this->addTimer(rkv::Config::getInstance().rdb_interval_ * 1000, [this] () {
+    //             this->startRdb();
+    //         }, this->rdb_timer_req_.get());
+    //     }, this->rdb_timer_req_.get());
+    // }
 }
 
 void EventLoop::startHandshake() {
-    if(this->handShake_req_->fd_ > 0) {
-        ::close(this->handShake_req_->fd_);
-    }
+    // if(this->handShake_req_->fd_ > 0) {
+    //     ::close(this->handShake_req_->fd_);
+    // }
 
-    this->handShake_req_->setFd(Socket::setNoblockingSocket());
-    this->handShake_req_->setAddr(rkv::Config::getInstance().master_ip_.c_str(), rkv::Config::getInstance().master_port_);
-    this->handShake_req_->state_ = HandshakeState::CONNECTING;
-    this->handShake_req_->write_offset_ = 0;
+    // this->handShake_req_->setFd(Socket::setNoblockingSocket());
+    // this->handShake_req_->setAddr(rkv::Config::getInstance().master_ip_.c_str(), rkv::Config::getInstance().master_port_);
+    // this->handShake_req_->state_ = HandshakeState::CONNECTING;
+    // this->handShake_req_->write_offset_ = 0;
 
-    io_uring_sqe* sqe = io_uring_get_sqe(this->ring_);
-    if(!sqe) {
-        io_uring_submit(this->ring_);
-        sqe = io_uring_get_sqe(this->ring_);
-    }
+    // io_uring_sqe* sqe = io_uring_get_sqe(this->ring_);
+    // if(!sqe) {
+    //     io_uring_submit(this->ring_);
+    //     sqe = io_uring_get_sqe(this->ring_);
+    // }
 
-    io_uring_prep_connect(sqe, this->handShake_req_->fd_, (sockaddr*)&this->handShake_req_->addr_, sizeof(sockaddr_in));
-    io_uring_sqe_set_data(sqe, this->handShake_req_.get());
+    // io_uring_prep_connect(sqe, this->handShake_req_->fd_, (sockaddr*)&this->handShake_req_->addr_, sizeof(sockaddr_in));
+    // io_uring_sqe_set_data(sqe, this->handShake_req_.get());
 }
 
 void EventLoop::doHandshake() {
@@ -659,37 +661,37 @@ void EventLoop::sendToReplica(const TcpConnectionPtr& conn, SendReplicaRequest* 
 }
 
 void EventLoop::do_Active_Expire() {
-    int count{0}, timeout_count{0};
+    // int count{0}, timeout_count{0};
 
-    if(rkv::kvserver::expires_.getUnderlyingMap().empty()) return;
+    // if(rkv::kvserver::expires_.getUnderlyingMap().empty()) return;
 
-    for(auto it = rkv::kvserver::expires_.getUnderlyingMap().begin(); it != rkv::kvserver::expires_.getUnderlyingMap().end(), 
-    count <= ACTIVEEXPIRESIZE; ++count) {
+    // for(auto it = rkv::kvserver::expires_.getUnderlyingMap().begin(); it != rkv::kvserver::expires_.getUnderlyingMap().end(), 
+    // count <= ACTIVEEXPIRESIZE; ++count) {
 
-        if(getCurrentTimestamp() >= it->second) {
-            rkv::kvserver::expires_.getUnderlyingMap().erase(it);
-            ++timeout_count;
+    //     if(getCurrentTimestamp() >= it->second) {
+    //         rkv::kvserver::expires_.getUnderlyingMap().erase(it);
+    //         ++timeout_count;
 
-        } else {
-            ++it;
-        }
-    }
+    //     } else {
+    //         ++it;
+    //     }
+    // }
 
-    while(timeout_count >= 0.25 * ACTIVEEXPIRESIZE) {
-        timeout_count = 0;
+    // while(timeout_count >= 0.25 * ACTIVEEXPIRESIZE) {
+    //     timeout_count = 0;
 
-        for(auto it = rkv::kvserver::expires_.getUnderlyingMap().begin(); it != rkv::kvserver::expires_.getUnderlyingMap().end(), 
-        count <= ACTIVEEXPIRESIZE; ++count) {
+    //     for(auto it = rkv::kvserver::expires_.getUnderlyingMap().begin(); it != rkv::kvserver::expires_.getUnderlyingMap().end(), 
+    //     count <= ACTIVEEXPIRESIZE; ++count) {
 
-            if(getCurrentTimestamp() >= it->second) {
-                rkv::kvserver::expires_.getUnderlyingMap().erase(it);
-                ++timeout_count;
+    //         if(getCurrentTimestamp() >= it->second) {
+    //             rkv::kvserver::expires_.getUnderlyingMap().erase(it);
+    //             ++timeout_count;
 
-            } else {
-                ++it;
-            }
-        }
-    }
+    //         } else {
+    //             ++it;
+    //         }
+    //     }
+    // }
 }
 
 void EventLoop::start_Active_Expire() {
@@ -706,35 +708,8 @@ void EventLoop::start_Active_Expire() {
 ReplBacklog* EventLoop::replBacklog()
 { return &this->repl_backlog_; }
 
-void EventLoop::setHttpConnectCallback(const HttpConnectCallback& cb)
-{ this->HttpConnectCallback_ = cb; }
-
-void EventLoop::startConnectHttp() {
-    if(!this->HttpConnect_req_) {
-        this->HttpConnect_req_ = std::make_unique<HttpConnectRequest>();
-        this->HttpConnect_req_->setLoop(this);
-        this->HttpConnect_req_->setType(IoType::HTTP_CONNECT);
-    }
-
-    if(this->HttpConnect_req_->fd_ > 0) {
-        ::close(this->HttpConnect_req_->fd_);
-    }
-
-    this->HttpConnect_req_->setFd(Socket::setNoblockingSocket());
-    this->HttpConnect_req_->setAddr(rkv::Config::getInstance().master_ip_.c_str(), rkv::Config::getInstance().master_port_);
-
-    io_uring_sqe* sqe = io_uring_get_sqe(this->ring_);
-    if(!sqe) {
-        io_uring_submit(this->ring_);
-        sqe = io_uring_get_sqe(this->ring_);
-    }
-
-    io_uring_prep_connect(sqe, this->HttpConnect_req_->fd_, (sockaddr*)&this->HttpConnect_req_->addr_, sizeof(sockaddr_in));
-    io_uring_sqe_set_data(sqe, this->HttpConnect_req_.get());
-}
-
 void EventLoop::loop() {
-std::cout << "loop begin" << std::endl;
+    LOG_INFO("loop begin");
 
     this->armWakeupFd();
 
@@ -743,9 +718,9 @@ std::cout << "loop begin" << std::endl;
     initRdb();
     start_Active_Expire();
 
-    if(rkv::Config::getInstance().cluster_enabled_ && !rkv::Config::getInstance().is_master_) {
-        startHandshake();
-    }
+    // if(rkv::Config::getInstance().cluster_enabled_ && !rkv::Config::getInstance().is_master_) {
+    //     startHandshake();
+    // }
 
     while(!this->quit_) {
 
@@ -834,13 +809,8 @@ std::cout << "loop begin" << std::endl;
                 PendingWrite* pw = reinterpret_cast<PendingWrite*>(req_head);
                 pw->onComplete(cqe->res);
 
-            } else if(req_head->type_ == IoType::HTTP_CONNECT) {
-                HttpConnectRequest* httpConnectReq = reinterpret_cast<HttpConnectRequest*>(req_head);
-                httpConnectReq->onComplete(cqe->res);
-
             } else {
-                std::cout << "CRITICAL: Unknown CQE type: " << (int)req_head->type_ 
-                        << " ptr: " << req_head << std::endl;
+                LOG_FATAL("CRITICAL: Unknown CQE type");
             }
 
             ++count;

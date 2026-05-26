@@ -1,28 +1,24 @@
 #pragma once
 
-#include <memory>
 #include <string>
 #include <unordered_map>
 
+#include "Buffer.h"
 #include "EventLoop.h"
 #include "Callbacks.h"
 #include "Acceptor.h"
+#include "PendingWrite.h"
 
 namespace rkv {
 
 class JemallocWrapper;
 class Ringengine;
-class Config;
 class TcpConnection;
-struct ServerContext;
 
 };
 
 namespace AeroIO {
-
 namespace net {
-
-class ReplyBufferPool;
 
 enum class Option { kNoReusePort, kReusePort };
 
@@ -33,13 +29,12 @@ public:
 
     using LoopsEngines = std::vector<std::pair<EventLoop*, rkv::Ringengine*>>*;
 
-    TcpServer(rkv::ServerContext*, int, Option option = Option::kReusePort);
+    TcpServer(rkv::JemallocWrapper*, int, Option option = Option::kReusePort);
 
     void start();
-    EventLoop* getLoop() const;
+    EventLoop* getLoop();
     void setLoopsEngines(LoopsEngines LoopsEngines);
     LoopsEngines getLoopsEngines();
-    rkv::ServerContext* getServerContext();
 
     void setMessageCallback(const MessageCallback&);
     void setConnectionCallback(const ConnectionCallback&);
@@ -51,9 +46,12 @@ public:
 
 private:
 
-    rkv::ServerContext* Serverctx_;
-    std::unique_ptr<EventLoop> loop_;
-    std::unique_ptr<Acceptor> acceptor_;
+    rkv::JemallocWrapper* mempool_;
+    EventLoop loop_{};
+    Acceptor acceptor_;
+    ReplyBufferPool replyBufferPool_;
+    BlockPool blockPool_;
+
     std::string name_;
     LoopsEngines LoopsEngines_;
 
@@ -65,5 +63,4 @@ private:
 };
 
 };
-
 };

@@ -5,6 +5,7 @@
 #include <deque>
 #include <memory>
 #include <atomic>
+#include <thread>
 #include <unordered_set>
 
 #ifdef BLOCK_SIZE
@@ -13,7 +14,7 @@
 
 #include "Buffer.h"
 #include "IoRequest.h"
-#include "../../concurrentqueue/concurrentqueue.h"
+#include "concurrentqueue/concurrentqueue.h"
 
 namespace rkv {
 
@@ -61,9 +62,8 @@ public:
 
     using Functor = std::function<void()>;
     using TimerCallback = std::function<void()>;
-    using HttpConnectCallback = std::function<void(const TcpConnectionPtr&)>;
 
-    EventLoop(rkv::Ringengine* engine);
+    EventLoop();
     ~EventLoop();
 
     static EventLoop* getEventLoopOfCurrentThread();
@@ -106,9 +106,6 @@ public:
 
     void setLoopsEngines(std::vector<std::pair<EventLoop*, rkv::Ringengine*>>*);
     std::vector<std::pair<EventLoop*, rkv::Ringengine*>>* getLoopsEngines();
-
-    void startConnectHttp();
-    void setHttpConnectCallback(const HttpConnectCallback& cb);
 
 private:
     int createEventfd();
@@ -186,7 +183,6 @@ private:
     std::unique_ptr<RdbWriteRequest> rdbWrite_req_;
     std::unique_ptr<HandShakeRequest> handShake_req_;
     std::unique_ptr<SendReplicaRequest> sendRepl_req_;
-    std::unique_ptr<HttpConnectRequest> HttpConnect_req_;
     int connect_index_;
     std::string handShake_instruction_;
 
@@ -194,7 +190,6 @@ private:
     ReplBacklog repl_backlog_; // RingBuffer: no expansion std::vector<char>
     bool repl_is_writing_;
 
-    HttpConnectCallback HttpConnectCallback_;
     std::atomic<bool> is_sleeping_{false};
 
 };

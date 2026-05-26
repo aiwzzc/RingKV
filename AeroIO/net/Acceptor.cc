@@ -2,7 +2,6 @@
 #include "EventLoop.h"
 
 #include <string.h>
-#include <iostream>
 
 namespace AeroIO {
 

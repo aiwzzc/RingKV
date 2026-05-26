@@ -8,8 +8,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include "Buffer.h"
-
 namespace AeroIO {
 
 namespace net {
@@ -156,24 +154,6 @@ struct SendReplicaRequest {
     void setLoop(EventLoop* loop);
     void onComplete(int res_bytes);
 
-};
-
-struct HttpConnectRequest {
-
-    GeneralHead head_;
-    EventLoop* loop_;
-    sockaddr_in addr_;
-    int fd_;
-    int error_count_;
-
-    ~HttpConnectRequest();
-
-    void setType(IoType type);
-    void setFd(int fd);
-    void setAddr(const char* ip, int port);
-    void setLoop(EventLoop* loop);
-    void onComplete(int res_bytes);
-    void reset();
 };
 
 };

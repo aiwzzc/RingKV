@@ -1,12 +1,16 @@
-aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR} net_SRCS)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR} net_SRC)
 
-add_library(AeroIO_net ${net_SRCS})
+add_library(aeroIo_net ${net_SRC})
 
-target_include_directories(AeroIO_net 
+target_include_directories(aeroIo_net 
 PUBLIC 
-    ${CMAKE_CURRENT_SOURCE_DIR} 
-    ${CMAKE_SOURCE_DIR}/tools
+    ${CMAKE_SOURCE_DIR}/third_party
+    ${CMAKE_SOURCE_DIR}/AeroIO/base
 )
 
-find_library(JEMALLOC_LIB jemalloc)
-target_link_libraries(AeroIO_net ${JEMALLOC_LIB})
+target_link_libraries(aeroIo_net 
+PUBLIC
+    aeroIo_base
+    aeroIo_log
+    uring
+)

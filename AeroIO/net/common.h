@@ -13,7 +13,6 @@ struct CommandDef;
 };
 
 namespace AeroIO {
-
 namespace net {
 
 struct BufferBlock;
@@ -30,6 +29,14 @@ struct RoutedCommand {
 };
 
 using RouteBatch = std::vector<RoutedCommand>;
+
+class ReplyBufferPool;
+class BlockPool;
+
+struct PoolContext {
+    ReplyBufferPool* replyBufferPool;
+    BlockPool* blockPool;
+};
 
 };
 

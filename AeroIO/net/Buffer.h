@@ -2,10 +2,9 @@
 
 #include <cstddef>
 #include <vector>
-#include <atomic>
 #include <memory>
 
-#include "../../concurrentqueue/concurrentqueue.h"
+#include "concurrentqueue/concurrentqueue.h"
 
 namespace rkv {
 class JemallocWrapper;

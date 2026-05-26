@@ -1,12 +1,9 @@
 #include "TcpConnection.h"
 #include "EventLoop.h"
 #include "TcpServer.h"
-#include "src/common.h"
 
-#include <string.h>
 #include <assert.h>
 #include <liburing.h>
-#include <iostream>
 #include <immintrin.h>
 
 namespace {
@@ -34,14 +31,14 @@ namespace AeroIO {
 
 namespace net {
 
-TcpConnection::TcpConnection(EventLoop* loop, int socket, rkv::ServerContext* ctx) : 
-    loop_(loop), state_(StateE::kConnecting), socket_(std::make_unique<Socket>(socket)),
-    Serverctx_(ctx), is_replica_(false), need_reply_(true),
+TcpConnection::TcpConnection(EventLoop* loop, int socket, PoolContext& ctx) : 
+    loop_(loop), 
+    state_(StateE::kConnecting), 
+    socket_(std::make_unique<Socket>(socket)),
+    Poolctx_(std::move(ctx)), is_replica_(false), need_reply_(true),
     is_writing_(false) {
 
     // socket_->setKeepAlive(true);
-    this->send_pending_ = std::make_unique<PendingWrite>(this->Serverctx_->mempool);
-    this->send_pending_->setType(IoType::HTTP_SEND);
 }
 
 TcpConnection::~TcpConnection()
@@ -119,7 +116,7 @@ int TcpConnection::pendResIndex()
 
 ReplyBufferPtr TcpConnection::getCurrentReplyBuffer() {
     if(!this->current_reply_) {
-        this->current_reply_ = this->Serverctx_->replyBufPool->get();
+        this->current_reply_ = this->Poolctx_.replyBufferPool->get();
         this->current_reply_->setConn(shared_from_this());
         this->current_reply_->in_used_ = true;
     }
@@ -214,7 +211,7 @@ void TcpConnection::start() {
         return;
     }
 
-    this->active_recv_block_ = this->Serverctx_->blockPool->get();
+    this->active_recv_block_ = this->Poolctx_.blockPool->get();
     this->recv_blocks_.push_back(this->active_recv_block_);
 
     io_uring_prep_recv(sqe, index, (void*)this->active_recv_block_->beginWrite(), 
@@ -246,19 +243,13 @@ void TcpConnection::handleRead(int res_bytes) {
     }
 
     if(this->recv_blocks_.empty() || this->recv_blocks_.back()->writableBytes() < 512) {
-        this->active_recv_block_ = this->Serverctx_->blockPool->get();
+        this->active_recv_block_ = this->Poolctx_.blockPool->get();
         this->recv_blocks_.push_back(this->active_recv_block_);
 
     } else {
         this->active_recv_block_ = this->recv_blocks_.back();
     }
 
-    // io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-    // if(!sqe) {
-    //     io_uring_submit(this->loop_->ring());
-
-    //     sqe = io_uring_get_sqe(this->loop_->ring());
-    // }
     io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
 
     IoRequest* req = this->read_req_.get();
@@ -413,8 +404,6 @@ void TcpConnection::detachFromLoop() {
         // this->replyBufPool_->release(this->current_reply_);
         this->current_reply_.reset();
     }
-
-    this->Serverctx_ = nullptr;
 }
 
 void TcpConnection::attachToLoop(EventLoop* newLoop) {
@@ -426,7 +415,7 @@ void TcpConnection::attachToLoop(EventLoop* newLoop) {
     close_req_->setType(IoType::CLOSE);
 
     TcpServer* newTcpServer = newLoop->getTcpServer();
-    this->Serverctx_ = newTcpServer->getServerContext();
+    // this->Serverctx_ = newTcpServer->getServerContext();
 
     // this->
 

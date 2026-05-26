@@ -5,12 +5,18 @@
 
 namespace AeroIO::Logger {
 
+#if 0
+
 #ifdef __cpp_lib_hardware_interference_size
 #include <new>
     constexpr std::size_t KCacheLineSize = std::hardware_destructive_interference_size;
 #else
     constexpr std::size_t KCacheLineSize = 64;
 #endif
+
+#endif
+
+constexpr std::size_t KCacheLineSize = 64;
 
 template<typename T, std::size_t Capacity>
 class MpscRingBuffer {

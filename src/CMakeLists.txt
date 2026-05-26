@@ -1,34 +1,15 @@
-aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR} Server_SRC)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR} RingKV_SRC)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(JEMALLOC jemalloc)
+add_executable(RingKV ${RingKV_SRC})
 
-add_executable(RingKV ${Server_SRC})
-
-# target_compile_options(RingKV PRIVATE -pg)
-# target_link_options(RingKV PRIVATE -pg)
-
-# target_compile_options(RingKV PRIVATE
-#     -fsanitize=address
-#     -fno-omit-frame-pointer
-#     -g
-#     -O0
-# )
-
-# target_link_options(RingKV PRIVATE
-#     -fsanitize=address
-# )
-
-target_include_directories(RingKV PRIVATE
-    ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/third_party
+target_include_directories(RingKV 
+PRIVATE
+    ${CMAKE_SOURCE_DIR}/server
+    ${CMAKE_SOURCE_DIR}/AeroIO/base
 )
 
 target_link_libraries(RingKV 
 PUBLIC
-    AeroIO_net 
-    uring 
-    jemalloc 
-    hiredis 
-    ${JEMALLOC_LIBRARIES}
+    rkv_server
+    aeroIo_log
 )

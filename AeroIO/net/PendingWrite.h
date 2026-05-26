@@ -2,20 +2,14 @@
 
 #include <memory>
 #include <vector>
-#include <atomic>
 #include <sys/uio.h>
+
 #include "IoRequest.h"
 #include "common.h"
 
 namespace rkv {
 
-struct RedisObject;
 class JemallocWrapper;
-struct kvstr;
-class Ringengine;
-struct CommandContext;
-struct CommandDef;
-class KvsProtocolHandler;
 
 };
 
@@ -35,6 +29,10 @@ struct list_head {
     struct list_head* prev_;
     struct list_head* next_;
 };
+
+inline void INIT_LIST_HEAD(list_head* head);
+inline void list_add(list_head* head, list_head* node);
+inline void list_del(list_head* node);
 
 #define MAX_IOV_COUNT 4096
 #define META_BUF_SIZE 4096
@@ -142,50 +140,53 @@ private:
 
 };
 
-// ============ RouteBatchTask =============
+// // ============ RouteBatchTask =============
 
-using execute_cmd = void(*)(rkv::CommandContext&, const rkv::CommandDef*);
+// using execute_cmd = void(*)(rkv::CommandContext&, const rkv::CommandDef*);
+// using RouteBatchTaskCallback = std::function<void()>;
 
-struct RouteBatchTask {
+// struct RouteBatchTask {
 
-    struct list_head node_;
+//     struct list_head node_;
 
-    RoutedCommand cmds[64];
-    int cmd_count_{0};
+//     RoutedCommand cmds[64];
+//     int cmd_count_{0};
 
-    TcpConnectionPtr conn_;
-    rkv::Ringengine* target_engine_;
-    EventLoop* target_loop_;
-    EventLoop* current_loop_;
-    execute_cmd execute_;
+//     TcpConnectionPtr conn_;
+//     rkv::Ringengine* target_engine_;
+//     EventLoop* target_loop_;
+//     EventLoop* current_loop_;
+//     execute_cmd execute_;
 
-    void reset();
-    void operator()();
+//     void reset();
+//     void operator()();
     
-};
+// };
 
-using RouteBatchTaskPtr = std::shared_ptr<RouteBatchTask>;
+// using RouteBatchTaskPtr = std::shared_ptr<RouteBatchTask>;
 
-constexpr std::size_t TASKPOOLSIZE = 512;
+// constexpr std::size_t TASKPOOLSIZE = 512;
 
-class RouteBatchTaskPool {
+// class RouteBatchTaskPool {
 
-private:
-    struct list_head head_;
-    std::size_t pool_size_;
-    rkv::JemallocWrapper* mempool_;
+// private:
+//     struct list_head head_;
+//     std::size_t pool_size_;
+//     rkv::JemallocWrapper* mempool_;
+//     RouteBatchTaskCallback cb_;
 
-public:
-    RouteBatchTaskPool();
-    ~RouteBatchTaskPool();
+// public:
+//     RouteBatchTaskPool();
+//     ~RouteBatchTaskPool();
 
-    static RouteBatchTaskPool& getInstance();
-    RouteBatchTaskPtr get(EventLoop* current_loop);
-    void release(RouteBatchTask* task);
-    void initPool();
-    void setMempool(rkv::JemallocWrapper* mempool);
+//     static RouteBatchTaskPool& getInstance();
+//     RouteBatchTaskPtr get(EventLoop* current_loop);
+//     void release(RouteBatchTask* task);
+//     void initPool();
+//     void setMempool(rkv::JemallocWrapper* mempool);
+//     void setRouteBatchTaskCallback(const RouteBatchTaskCallback& cb);
 
-};
+// };
 
 };
 

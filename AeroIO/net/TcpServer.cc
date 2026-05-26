@@ -1,46 +1,49 @@
 #include "TcpServer.h"
-#include "Socket.h"
+#include "EventLoop.h"
 #include "TcpConnection.h"
 #include "PendingWrite.h"
-#include "src/jemalloc.h"
-#include "src/config.h"
-#include "src/common.h"
 
-#include <iostream>
+#include "Log/LogApi.h"
+
+// #include "src/config.h"
+// #include "src/common.h"
 
 namespace AeroIO {
 
 namespace net {
 
-TcpServer::TcpServer(rkv::ServerContext* ctx, int port, Option option) : Serverctx_(ctx), 
-    loop_(std::make_unique<EventLoop>(ctx->engine)),
-    acceptor_(std::make_unique<Acceptor>(this->loop_.get(), port, option == Option::kReusePort)) {
+TcpServer::TcpServer(rkv::JemallocWrapper* mempool, int port, Option option) : 
+    mempool_(mempool), 
+    acceptor_(&this->loop_, port, option == Option::kReusePort),
+    replyBufferPool_(mempool, 10), 
+    blockPool_(mempool) {
 
-    this->acceptor_->setNewConnectionCallback([this, option] (int sockfd) {
+    this->acceptor_.setNewConnectionCallback([this, option] (int sockfd) {
         this->addNewConnection(sockfd);
     });
 
-    RouteBatchTaskPool& taskPool = RouteBatchTaskPool::getInstance();
-    taskPool.setMempool(this->Serverctx_->mempool);
-    taskPool.initPool();
+    // RouteBatchTaskPool& taskPool = RouteBatchTaskPool::getInstance();
+    // taskPool.setMempool(mempool);
+    // taskPool.initPool();
 }
 
 TcpConnectionPtr TcpServer::addNewConnection(int sockfd) {
-    TcpConnectionPtr conn = std::make_shared<TcpConnection>(this->loop_.get(), sockfd, this->Serverctx_);
+    PoolContext poolctx{&this->replyBufferPool_, &this->blockPool_};
+    TcpConnectionPtr conn = std::make_shared<TcpConnection>(&this->loop_, sockfd, poolctx);
 
-    int index = this->loop_->getFreeFixedFd();
+    int index = this->loop_.getFreeFixedFd();
 
     if(index < 0) {
-        index = this->loop_->getNextIndex();
+        index = this->loop_.getNextIndex();
         if(index < 0) {
-            // LOG_ERROR MAXCONNLIMIT
+            LOG_ERROR("MAXCONNLIMIT");
             return nullptr;
         }
     }
 
-    this->loop_->getFixedFds()[index] = sockfd;
+    this->loop_.getFixedFds()[index] = sockfd;
     
-    io_uring_register_files_update(this->loop_->ring(), index, &sockfd, 1);
+    io_uring_register_files_update(this->loop_.ring(), index, &sockfd, 1);
 
     conn->setFixedFileIndex(index);
 
@@ -48,8 +51,8 @@ TcpConnectionPtr TcpServer::addNewConnection(int sockfd) {
     conn->setConnectionCallback(this->connectionCallback_);
     conn->setWriteCompleteCallback(this->writeCompleteCallback_);
     conn->setCloseCallback([this] (const TcpConnectionPtr& conn) {
-        this->loop_->runInLoop([this, conn] () {
-            if(conn->IsReplica()) this->loop_->removeFromReplicas_(conn);
+        this->loop_.runInLoop([this, conn] () {
+            if(conn->IsReplica()) this->loop_.removeFromReplicas_(conn);
             this->connections_.erase(conn->fd());
             conn->connectDestroyed();
         });
@@ -57,7 +60,7 @@ TcpConnectionPtr TcpServer::addNewConnection(int sockfd) {
 
     this->connections_[sockfd] = conn;
 
-    this->loop_->runInLoop([conn] () {
+    this->loop_.runInLoop([conn] () {
         conn->connectEstablished();
         conn->start();
     });
@@ -91,23 +94,20 @@ void TcpServer::setWriteCompleteCallback(const WriteCompleteCallback& cb)
 { this->writeCompleteCallback_ = cb; }
 
 void TcpServer::start() {
-    this->loop_->setTcpServer(this);
-    this->loop_->setLoopsEngines(this->LoopsEngines_);
-    this->acceptor_->start();
-    this->loop_->loop();
+    this->loop_.setTcpServer(this);
+    this->loop_.setLoopsEngines(this->LoopsEngines_);
+    this->acceptor_.start();
+    this->loop_.loop();
 }
 
-EventLoop* TcpServer::getLoop() const
-{ return this->loop_.get(); }
+EventLoop* TcpServer::getLoop()
+{ return &this->loop_; }
 
 void TcpServer::setLoopsEngines(LoopsEngines LoopsEngines)
 { this->LoopsEngines_ = LoopsEngines; }
 
 TcpServer::LoopsEngines TcpServer::getLoopsEngines() 
 { return this->LoopsEngines_; }
-
-rkv::ServerContext* TcpServer::getServerContext() 
-{ return this->Serverctx_; }
 
 };
 

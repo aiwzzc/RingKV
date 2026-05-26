@@ -2,7 +2,7 @@
 #include "TcpConnection.h"
 #include "EventLoop.h"
 #include "TcpServer.h"
-#include "http/HttpServer.h"
+
 #include <iostream>
 #include <cstring>
 #include <sys/socket.h>
@@ -268,68 +268,6 @@ void HandShakeRequest::onComplete(int res_bytes) {
     }
 }
 
-HttpConnectRequest::~HttpConnectRequest()
-{ ::close(this->fd_); }
-
-void HttpConnectRequest::setType(IoType type)
-{ this->head_.type_ = type; }
-
-void HttpConnectRequest::setFd(int fd)
-{ this->fd_ = fd; }
-
-void HttpConnectRequest::setAddr(const char* ip, int port) {
-    this->addr_.sin_family = AF_INET;
-    this->addr_.sin_port = htons(port);
-    this->addr_.sin_addr.s_addr = ::inet_addr(ip);
-}
-
-void HttpConnectRequest::setLoop(EventLoop* loop)
-{ this->loop_ = loop; }
-
-void HttpConnectRequest::onComplete(int res_bytes) {
-
-    if(this->loop_ && this->head_.type_ == IoType::HTTP_CONNECT) {
-        if(res_bytes < 0) {
-            int err = -res_bytes;
-            std::cerr << "[Handshake Error] Failed in state " 
-                    << ", error: " << strerror(err) << std::endl;
-
-            if(++this->error_count_ >= 5) {
-                std::cerr << "[Handshake Fatal] Max retries reached. Giving up." << std::endl;
-                this->reset();
-
-                return;
-            }
-
-            if(this->fd_ >= 0) {
-                ::close(this->fd_);
-                this->fd_ = -1;
-            }
-
-            this->loop_->addTimer(5000, [this] () {
-                this->loop_->startConnectHttp();
-            }, this->loop_->HttpConnect_timer_req_.get());
-
-        } else {
-            int targer_fd = this->fd_;
-            this->fd_ = 0;
-
-            TcpConnectionPtr conn = this->loop_->TcpServer_->addNewConnection(targer_fd);
-            this->loop_->HttpConnectCallback_(conn);
-        }
-    }
-
-}
-
-void HttpConnectRequest::reset() {
-    if(this->fd_ > 0) {
-        ::close(this->fd_);
-        this->fd_ = -1;
-    }
-
-    this->error_count_ = 0;
-}
-
 void SendReplicaRequest::setType(IoType type)
 { this->head_.type_ = IoType::REPL_SEND; }
 
@@ -344,9 +282,6 @@ void SendReplicaRequest::onComplete(int res_bytes) {
     if(this->conn_ && this->loop_ && this->head_.type_ == IoType::REPL_SEND) {
         if(res_bytes > 0) {
             this->conn_->addReplOffset(res_bytes);
-            // std::cout << conn_->fd() << std::endl;
-            // std::cout << conn_->getReplicaOffset() << std::endl;
-            // std::cout << this->loop_->repl_backlog_.getMasterOffset() << std::endl;
 
             if(this->conn_->getReplicaOffset() < this->loop_->repl_backlog_.getMasterOffset()) {
                 this->loop_->sendToReplica(this->conn_, this);
