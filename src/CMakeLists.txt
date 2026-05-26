@@ -1,5 +1,3 @@
-include_directories(${CMAKE_SOURCE_DIR})
-
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR} Server_SRC)
 
 find_package(PkgConfig REQUIRED)
@@ -23,7 +21,14 @@ add_executable(RingKV ${Server_SRC})
 
 target_include_directories(RingKV PRIVATE
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/tools
+    ${CMAKE_SOURCE_DIR}/third_party
 )
 
-target_link_libraries(RingKV AeroIO_net AeroIO_Http uring jemalloc hiredis ${JEMALLOC_LIBRARIES})
+target_link_libraries(RingKV 
+PUBLIC
+    AeroIO_net 
+    uring 
+    jemalloc 
+    hiredis 
+    ${JEMALLOC_LIBRARIES}
+)
