@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include "ringClient.h"
+
 #include "net/PendingWrite.h"
 #include "net/Buffer.h"
 #include "net/EventLoop.h"
@@ -10,16 +12,6 @@
 namespace rkv {
 
 // ============ RouteBatchTask =============
-
-using Args = std::variant<AeroIO::net::BlockPtr, std::string>;
-
-struct RoutedCommand {
-    std::vector<std::string_view> tokens_;
-    uint64_t slot_id_;
-    Args buffer_;
-    const rkv::CommandDef* cmd_def_;
-    std::string response_data_;
-};
 
 struct CommandContext;
 struct CommandDef;
@@ -33,7 +25,8 @@ struct RouteBatchTask {
     RoutedCommand cmds[64];
     int cmd_count_{0};
 
-    AeroIO::net::TcpConnectionPtr conn_;
+    ringClientPtr clinet_;
+    // AeroIO::net::TcpConnectionPtr conn_;
     rkv::Ringengine* target_engine_;
     AeroIO::net::EventLoop* target_loop_;
     AeroIO::net::EventLoop* current_loop_;

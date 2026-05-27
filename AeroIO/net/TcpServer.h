@@ -20,7 +20,7 @@ class TcpConnection;
 namespace AeroIO {
 namespace net {
 
-enum class Option { kNoReusePort, kReusePort };
+enum class AcceptorOption { kNoReusePort, kReusePort };
 
 class TcpServer {
 
@@ -29,7 +29,7 @@ public:
 
     using LoopsEngines = std::vector<std::pair<EventLoop*, rkv::Ringengine*>>*;
 
-    TcpServer(rkv::JemallocWrapper*, int, Option option = Option::kReusePort);
+    TcpServer(rkv::JemallocWrapper*, int, AcceptorOption option = AcceptorOption::kReusePort);
 
     void start();
     EventLoop* getLoop();

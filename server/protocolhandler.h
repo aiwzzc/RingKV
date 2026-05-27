@@ -7,6 +7,8 @@
 #include <variant>
 #include <unordered_map>
 
+#include "ringClient.h"
+
 namespace AeroIO {
 namespace net {
 
@@ -49,7 +51,8 @@ private:
     int dispatch(const AeroIO::net::TcpConnectionPtr&, std::vector<std::string_view>&, AeroIO::net::ReplyBuffer*);
     int try_parse_resp(const char*, std::size_t, std::size_t&, std::vector<std::string_view>&);
     static void executeCommandAndPersist(CommandContext& ctx, const CommandDef* def);
-    void dispatch_command(const AeroIO::net::TcpConnectionPtr& conn, std::vector<std::string_view>& tokens, 
+
+    void dispatch_command(const ringClientPtr& client, std::vector<std::string_view>& tokens, 
         const CommandDef* cmd_def, int current_slot_id, const Args& args, bool need_reply, void* ptr, 
         std::unordered_map<std::string_view, std::string>&, std::unordered_map<std::string_view, delay_write>&);
 

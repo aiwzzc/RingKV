@@ -1,5 +1,8 @@
 #include "protocolhandler.h"
 #include "RouteBatchTask.h"
+#include "ringClient.h"
+#include "config.h"
+#include "CommandHandlers.h"
 
 #include "net/TcpConnection.h"
 #include "net/Buffer.h"
@@ -8,13 +11,10 @@
 
 #include "core/engine.h"
 #include "ds/kvstr.h"
-
 #include "respresstr.h"
 
-#include "config.h"
-#include "CommandHandlers.h"
-
 #include <charconv>
+#include <memory>
 #include <string_view>
 #include <cstring>
 #include <hiredis/hiredis.h>
@@ -111,7 +111,6 @@ namespace {
 
 using AeroIO::net::ReplyBuffer;
 using AeroIO::net::EventLoop;
-using AeroIO::net::ResponseSlot;
 
 namespace rkv {
 
@@ -247,9 +246,15 @@ void KvsProtocolHandler::executeCommandAndPersist(CommandContext& ctx, const Com
     }
 }
 
-void KvsProtocolHandler::dispatch_command(const AeroIO::net::TcpConnectionPtr& conn, 
-    std::vector<std::string_view>& tokens_view, const CommandDef* cmd_def, int current_slot_id, 
-    const Args& args, bool need_reply, void* ptr, std::unordered_map<std::string_view, std::string>& local_notwrite_cache, 
+void KvsProtocolHandler::dispatch_command(
+    const ringClientPtr& client, 
+    std::vector<std::string_view>& tokens_view, 
+    const CommandDef* cmd_def, 
+    int current_slot_id, 
+    const Args& args, 
+    bool need_reply, 
+    void* ptr, 
+    std::unordered_map<std::string_view, std::string>& local_notwrite_cache, 
     std::unordered_map<std::string_view, delay_write>& local_last_write_slot) {
 
     std::vector<std::pair<AeroIO::net::EventLoop*, Ringengine*>>* LoopsEngines = 
@@ -260,7 +265,7 @@ void KvsProtocolHandler::dispatch_command(const AeroIO::net::TcpConnectionPtr& c
         CommandContext ctx{tokens_view, this->engine_, false, curr_loop, curr_loop, "", false};
         this->executeCommandAndPersist(ctx, cmd_def);
 
-        if(need_reply) conn->fillSingleSlot(current_slot_id, std::move(ctx.response_));
+        if(need_reply) client->fillSingleSlot(current_slot_id, std::move(ctx.response_));
 
     } else {
 
@@ -271,7 +276,7 @@ void KvsProtocolHandler::dispatch_command(const AeroIO::net::TcpConnectionPtr& c
             if(curr_loop == target_loop) {
                 if(local_notwrite_cache.contains(tokens_view[1]) && !cmd_def->is_write_) {
                     std::string hot_data = local_notwrite_cache[tokens_view[1]];
-                    if(need_reply) conn->fillSingleSlot(current_slot_id, std::move(hot_data));
+                    if(need_reply) client->fillSingleSlot(current_slot_id, std::move(hot_data));
                     return;
 
                 } else if(cmd_def->is_write_) {
@@ -286,68 +291,69 @@ void KvsProtocolHandler::dispatch_command(const AeroIO::net::TcpConnectionPtr& c
                 this->executeCommandAndPersist(ctx, cmd_def);
                 if(!cmd_def->is_write_) local_notwrite_cache[tokens_view[1]] = ctx.response_;
 
-                if(need_reply) conn->fillSingleSlot(current_slot_id, std::move(ctx.response_));
+                if(need_reply) client->fillSingleSlot(current_slot_id, std::move(ctx.response_));
 
             } else {
-                conn->route_batches()[target_index].emplace_back(std::move(tokens_view), current_slot_id, args, cmd_def);
-            }
-
-        } else if(cmd_def->key_type_ == KEYTYPE::MULTI_KEY) {
-            int keys_num = (tokens_view.size() - cmd_def->start_key_index_) / cmd_def->key_step_;
-
-            auto coordinator = std::make_shared<MultiKeyCoordinator>(conn, current_slot_id, cmd_def->name_, keys_num);
-
-            std::unordered_map<EventLoop*, SubTask> batch_tasks_;
-
-            int key_index{0};
-            for(int i = cmd_def->start_key_index_; i < tokens_view.size(); i += cmd_def->key_step_) {
-                std::string_view key = tokens_view[i];
-
-                std::size_t target_index = stable_hash(key) % LoopsEngines->size();
-                EventLoop* target_loop = (*LoopsEngines)[target_index].first;
-
-                batch_tasks_[target_loop].keys_.push_back(key);
-                batch_tasks_[target_loop].original_key_index_.push_back(key_index);
-                ++key_index;
-
-                batch_tasks_[target_loop].buffer_ = args;
-            }
-
-            coordinator->pending_tasks_.store(batch_tasks_.size(), std::memory_order_relaxed);
-
-            for(auto& [target_loop, task] : batch_tasks_) {
-                if(target_loop == curr_loop) {
-                    coordinator->handle_[coordinator->cmd_name_](task, curr_loop->getEngine(), coordinator);
-
-                } else {
-                    target_loop->runInLoop([target_loop, coordinator, task = std::move(task)] () mutable {
-                        coordinator->handle_[coordinator->cmd_name_](task, target_loop->getEngine(), coordinator);
-                    });
-                }
-            }
-
-        } else if(cmd_def->key_type_ == KEYTYPE::GLOBAL_KEY) {
-            auto coordinator = std::make_shared<GlobalKeyCoordinator>(conn, current_slot_id, cmd_def->name_);
-            coordinator->pending_tasks_.store(LoopsEngines->size(), std::memory_order_relaxed);
-
-            std::unordered_map<EventLoop*, GlobalSubTask> batch_tasks_;
-
-            for(auto& [loop, engine] : *LoopsEngines) {
-                batch_tasks_[loop].tokens_ = tokens_view;
-                batch_tasks_[loop].buffer_ = args;
-            }
-
-            for(auto& [target_loop, task] : batch_tasks_) {
-                if(target_loop == curr_loop) {
-                    coordinator->handle_[coordinator->cmd_name_](task, curr_loop->getEngine(), coordinator);
-
-                } else {
-                    target_loop->runInLoop([target_loop, coordinator, task = std::move(task)] () mutable {
-                        coordinator->handle_[coordinator->cmd_name_](task, target_loop->getEngine(), coordinator);
-                    });
-                }
+                client->route_cmds_per_loop()[target_index].emplace_back(std::move(tokens_view), current_slot_id, args, cmd_def);
             }
         }
+
+        // } else if(cmd_def->key_type_ == KEYTYPE::MULTI_KEY) {
+        //     int keys_num = (tokens_view.size() - cmd_def->start_key_index_) / cmd_def->key_step_;
+
+        //     auto coordinator = std::make_shared<MultiKeyCoordinator>(conn, current_slot_id, cmd_def->name_, keys_num);
+
+        //     std::unordered_map<EventLoop*, SubTask> batch_tasks_;
+
+        //     int key_index{0};
+        //     for(int i = cmd_def->start_key_index_; i < tokens_view.size(); i += cmd_def->key_step_) {
+        //         std::string_view key = tokens_view[i];
+
+        //         std::size_t target_index = stable_hash(key) % LoopsEngines->size();
+        //         EventLoop* target_loop = (*LoopsEngines)[target_index].first;
+
+        //         batch_tasks_[target_loop].keys_.push_back(key);
+        //         batch_tasks_[target_loop].original_key_index_.push_back(key_index);
+        //         ++key_index;
+
+        //         batch_tasks_[target_loop].buffer_ = args;
+        //     }
+
+        //     coordinator->pending_tasks_.store(batch_tasks_.size(), std::memory_order_relaxed);
+
+        //     for(auto& [target_loop, task] : batch_tasks_) {
+        //         if(target_loop == curr_loop) {
+        //             coordinator->handle_[coordinator->cmd_name_](task, curr_loop->getEngine(), coordinator);
+
+        //         } else {
+        //             target_loop->runInLoop([target_loop, coordinator, task = std::move(task)] () mutable {
+        //                 coordinator->handle_[coordinator->cmd_name_](task, target_loop->getEngine(), coordinator);
+        //             });
+        //         }
+        //     }
+
+        // } else if(cmd_def->key_type_ == KEYTYPE::GLOBAL_KEY) {
+        //     auto coordinator = std::make_shared<GlobalKeyCoordinator>(conn, current_slot_id, cmd_def->name_);
+        //     coordinator->pending_tasks_.store(LoopsEngines->size(), std::memory_order_relaxed);
+
+        //     std::unordered_map<EventLoop*, GlobalSubTask> batch_tasks_;
+
+        //     for(auto& [loop, engine] : *LoopsEngines) {
+        //         batch_tasks_[loop].tokens_ = tokens_view;
+        //         batch_tasks_[loop].buffer_ = args;
+        //     }
+
+        //     for(auto& [target_loop, task] : batch_tasks_) {
+        //         if(target_loop == curr_loop) {
+        //             coordinator->handle_[coordinator->cmd_name_](task, curr_loop->getEngine(), coordinator);
+
+        //         } else {
+        //             target_loop->runInLoop([target_loop, coordinator, task = std::move(task)] () mutable {
+        //                 coordinator->handle_[coordinator->cmd_name_](task, target_loop->getEngine(), coordinator);
+        //             });
+        //         }
+        //     }
+        // }
     }
 }
 
@@ -356,8 +362,9 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
     auto* LoopsEngines = conn->getLoop()->getLoopsEngines();
     EventLoop* curr_loop = EventLoop::getEventLoopOfCurrentThread();
     auto* registry = &CommandRegister::instance();
-    if(conn->route_batches().empty()) conn->route_batches().resize(LoopsEngines->size());
     bool need_reply = conn->NeedReply();
+
+    ringClientPtr client = std::make_shared<ringClient>(conn, LoopsEngines->size());
 
     std::unordered_map<std::string_view, std::string> local_notwrite_cache;
     std::unordered_map<std::string_view, delay_write> local_last_write_slot;
@@ -395,11 +402,11 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
 
                 if(need_reply) {
                     ResponseSlot slot;
-                    current_slot_id = conn->appendPendRes(slot);
+                    current_slot_id = client->appendPendRes(slot);
                 }
 
                 if(!cmd_def) {
-                    if(need_reply) conn->fillSingleSlot(current_slot_id, UNKNOWNCOMMANDSTR);
+                    if(need_reply) client->fillSingleSlot(current_slot_id, UNKNOWNCOMMANDSTR);
 
                     continue;
                 }
@@ -407,12 +414,12 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
                 if((cmd_def->arity_ > 0 && tokens.size() != cmd_def->arity_)||
                     (cmd_def->arity_ < 0 && tokens.size() < -cmd_def->arity_)) {
 
-                    if(need_reply) conn->fillSingleSlot(current_slot_id, WRONGNUMBERSTR);
+                    if(need_reply) client->fillSingleSlot(current_slot_id, WRONGNUMBERSTR);
 
                     continue;
                 }
 
-                dispatch_command(conn, tokens, cmd_def, current_slot_id, conn->fragmented_buffer_, need_reply, LoopsEngines, 
+                dispatch_command(client, tokens, cmd_def, current_slot_id, conn->fragmented_buffer_, need_reply, LoopsEngines, 
                 local_notwrite_cache, local_last_write_slot);
 
                 // conn->fragmented_buffer_.erase(0, pos);
@@ -470,16 +477,15 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
 
             const CommandDef* cmd_def = registry->lookup(cmd_view);
 
-            bool need_reply = conn->NeedReply();
             uint64_t current_slot_id = 0;
 
             if(need_reply) {
                 ResponseSlot slot;
-                current_slot_id = conn->appendPendRes(slot);
+                current_slot_id = client->appendPendRes(slot);
             }
 
             if(!cmd_def) {
-                if(need_reply) conn->fillSingleSlot(current_slot_id, UNKNOWNCOMMANDSTR);
+                if(need_reply) client->fillSingleSlot(current_slot_id, UNKNOWNCOMMANDSTR);
 
                 buffer->retrieve(pos);
                 continue;
@@ -488,13 +494,13 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
             if((cmd_def->arity_ > 0 && tokens_view.size() != cmd_def->arity_)||
                 (cmd_def->arity_ < 0 && tokens_view.size() < -cmd_def->arity_)) {
 
-                if(need_reply) conn->fillSingleSlot(current_slot_id, WRONGNUMBERSTR);
+                if(need_reply) client->fillSingleSlot(current_slot_id, WRONGNUMBERSTR);
 
                 buffer->retrieve(pos);
                 continue;
             }
 
-            dispatch_command(conn, tokens_view, cmd_def, current_slot_id, buffer, need_reply, LoopsEngines, 
+            dispatch_command(client, tokens_view, cmd_def, current_slot_id, buffer, need_reply, LoopsEngines, 
             local_notwrite_cache, local_last_write_slot);
 
             buffer->retrieve(pos);
@@ -512,42 +518,45 @@ EXECUTE_LOCAL_WRITES:
 
         for(auto& slot_id : delay_write.slot_indexs_) {
             std::string delay_res = ctx.response_;
-            if(need_reply) conn->fillSingleSlot(slot_id, std::move(delay_res));
+            if(need_reply) client->fillSingleSlot(slot_id, std::move(delay_res));
         }
     }
 
-    conn->tryFlushResponses();
+    client->tryFlushResponses();
 
 END_PARSE:
     for(int i = 0; i < LoopsEngines->size(); ++i) {
-        auto& batch = conn->route_batches()[i];
+        auto& batch_cmds_per_loop = client->route_cmds_per_loop();
+        auto& batch_cmds = batch_cmds_per_loop[i];
+
         Ringengine* target_engine = (*LoopsEngines)[i].second;
         EventLoop* curr_loop = EventLoop::getEventLoopOfCurrentThread();
 
-        if(batch.empty()) continue;
+        if(batch_cmds.empty()) continue;
 
         EventLoop* target_loop = (*LoopsEngines)[i].first;
 
         RouteBatchTaskPtr task = RouteBatchTaskPool::getInstance().get(curr_loop);
-        task->conn_ = conn;
+        // task->conn_ = conn;
+        task->clinet_ = client;
         task->current_loop_ = curr_loop;
         task->target_engine_ = target_engine;
         task->target_loop_ = target_loop;
-        task->cmd_count_ = batch.size();
+        task->cmd_count_ = batch_cmds.size();
         task->execute_ = KvsProtocolHandler::executeCommandAndPersist;
         
-        for(int j = 0; j < batch.size(); ++j) {
-            task->cmds[j] = std::move(batch[j]);
+        for(int j = 0; j < batch_cmds.size(); ++j) {
+            task->cmds[j] = std::move(batch_cmds[j]);
         }
 
         target_loop->runInLoop([task]() mutable {
             (*task)(); 
         });
 
-        batch.clear();
+        batch_cmds.clear();
     }
 
-    conn->tryFlushResponses();
+    client->tryFlushResponses();
 
     return 0;
 }

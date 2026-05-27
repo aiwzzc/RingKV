@@ -1,4 +1,5 @@
 #include "kvserver.h"
+#include "RouteBatchTask.h"
 
 #include "net/TcpConnection.h"
 #include "persist/loader.h"
@@ -13,8 +14,12 @@ kvserver::kvserver() :
     engine_(&this->mempool_),
     protocol_(&this->engine_),
     context_(&this->mempool_, &this->engine_),
-    Tcpserver_(&this->mempool_, Config::getInstance().port_)
-     {}
+    Tcpserver_(&this->mempool_, Config::getInstance().port_) {
+
+        RouteBatchTaskPool& taskPool = RouteBatchTaskPool::getInstance();
+        taskPool.setMempool(&this->mempool_);
+        taskPool.initPool();
+    }
 
 void kvserver::start() {
 

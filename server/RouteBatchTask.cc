@@ -14,7 +14,7 @@ void RouteBatchTask::reset() {
     }
 
     this->cmd_count_ = 0;
-    this->conn_.reset();
+    this->clinet_.reset();
 }
 
 void RouteBatchTask::operator()() {
@@ -57,14 +57,14 @@ void RouteBatchTask::operator()() {
     }
 
     this->current_loop_->runInLoop([this] () mutable {
-        if(this->conn_) {
+        if(this->clinet_) {
             for(int i = 0; i < this->cmd_count_; ++i) {
                 if(this->cmds[i].slot_id_ != 0) {
-                    this->conn_->fillSingleSlot(this->cmds[i].slot_id_, std::move(this->cmds[i].response_data_));
+                    this->clinet_->fillSingleSlot(this->cmds[i].slot_id_, std::move(this->cmds[i].response_data_));
                 }
             }
 
-            this->conn_->tryFlushResponses();
+            this->clinet_->tryFlushResponses();
         }
     });
 }

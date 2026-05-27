@@ -5,26 +5,19 @@
 
 #include "Log/LogApi.h"
 
-// #include "src/config.h"
-// #include "src/common.h"
-
 namespace AeroIO {
 
 namespace net {
 
-TcpServer::TcpServer(rkv::JemallocWrapper* mempool, int port, Option option) : 
+TcpServer::TcpServer(rkv::JemallocWrapper* mempool, int port, AcceptorOption option) : 
     mempool_(mempool), 
-    acceptor_(&this->loop_, port, option == Option::kReusePort),
+    acceptor_(&this->loop_, port, option == AcceptorOption::kReusePort),
     replyBufferPool_(mempool, 10), 
     blockPool_(mempool) {
 
     this->acceptor_.setNewConnectionCallback([this, option] (int sockfd) {
         this->addNewConnection(sockfd);
     });
-
-    // RouteBatchTaskPool& taskPool = RouteBatchTaskPool::getInstance();
-    // taskPool.setMempool(mempool);
-    // taskPool.initPool();
 }
 
 TcpConnectionPtr TcpServer::addNewConnection(int sockfd) {

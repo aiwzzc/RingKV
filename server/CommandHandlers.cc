@@ -1,6 +1,7 @@
 #include "CommandHandlers.h"
 #include "kvserver.h"
 
+#include "Log/LogApi.h"
 #include "core/engine.h"
 #include "respresstr.h"
 
@@ -136,10 +137,10 @@ void MultiKeyCoordinator::finalizeResponse() {
         }
     }
 
-    this->conn_->getLoop()->runInLoop([finish_str = std::move(finish_str), this] () mutable {
-        this->conn_->fillSingleSlot(this->slot_id_, std::move(finish_str));
-        this->conn_->tryFlushResponses();
-    });
+    // this->conn_->getLoop()->runInLoop([finish_str = std::move(finish_str), this] () mutable {
+    //     this->conn_->fillSingleSlot(this->slot_id_, std::move(finish_str));
+    //     this->conn_->tryFlushResponses();
+    // });
 }
 
 GlobalKeyCoordinator::GlobalKeyCoordinator(AeroIO::net::TcpConnectionPtr conn, int slot_id, const std::string& cmd_name):
@@ -165,15 +166,17 @@ void GlobalKeyCoordinator::finalizeResponse() {
         }
     }
 
-    this->conn_->getLoop()->runInLoop([this, finish_str = std::move(finish_str)] () mutable {
-        this->conn_->fillSingleSlot(this->slot_id_, std::move(finish_str));
-        this->conn_->tryFlushResponses();
-    });
+    // this->conn_->getLoop()->runInLoop([this, finish_str = std::move(finish_str)] () mutable {
+    //     this->conn_->fillSingleSlot(this->slot_id_, std::move(finish_str));
+    //     this->conn_->tryFlushResponses();
+    // });
 }
 
 void CommandHandlers::commandCommand(CommandContext& ctx) {
     ctx.success_ = true;
     ctx.response_ = EMPTYARRAYSTR;
+
+    LOG_INFO("commandCommand");
 }
 
 void CommandHandlers::pingCommand(CommandContext& ctx) {

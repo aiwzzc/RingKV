@@ -86,9 +86,6 @@ void TcpConnection::setContext(const std::any& context)
 void TcpConnection::setConnState(ConnState state)
 { this->connState_ = state; }
 
-std::vector<RouteBatch>& TcpConnection::route_batches()
-{ return this->route_batches_; }
-
 const std::any& TcpConnection::getContext() const
 { return this->context_; }
 
@@ -104,16 +101,6 @@ int TcpConnection::getFixedIndex() const
 void TcpConnection::setNoregister()
 { this->socket_->setNoregister(); }
 
-uint64_t TcpConnection::appendPendRes(ResponseSlot& slot) {
-    slot.id_ = this->next_slot_id_++;
-    this->pending_responses_.push_back(std::move(slot));
-
-    return slot.id_;
-}
-
-int TcpConnection::pendResIndex()
-{ return this->pending_responses_.size(); }
-
 ReplyBufferPtr TcpConnection::getCurrentReplyBuffer() {
     if(!this->current_reply_) {
         this->current_reply_ = this->Poolctx_.replyBufferPool->get();
@@ -124,64 +111,138 @@ ReplyBufferPtr TcpConnection::getCurrentReplyBuffer() {
     return this->current_reply_;
 }
 
-void TcpConnection::fillSingleSlot(uint64_t slot_id, std::string&& data) {
-    if(!this->connected() || slot_id == 0) return;
-
-    uint64_t front_id = this->pending_responses_.front().id_;
-
-    if(slot_id >= front_id && (slot_id - front_id) < this->pending_responses_.size()) {
-        auto& slot = this->pending_responses_[slot_id - front_id];
-        slot.data_ = std::move(data);
-        slot.is_ready_ = true;
-    }
-}
-
-void TcpConnection::fillPendingSlots(std::vector<std::pair<std::string, uint64_t>>&& result) {
-    if (!this->connected()) { return; }
-
-    for(auto& res : result) {
-        fillSingleSlot(res.second, std::move(res.first));
-    }
-}
-
-void TcpConnection::tryFlushResponses() {
-    if (!this->connected()) { return; }
+bool TcpConnection::tryFillReplyBuffer(std::string& msg) {
+    if (!this->connected()) { return false; }
 
     ReplyBufferPtr reply = this->getCurrentReplyBuffer();
-    if (!reply) return;
+    if (!reply) return false;
 
-    while(!this->pending_responses_.empty()) {
-        auto& slot = this->pending_responses_.front();
+    reply->appendString(std::move(msg));
 
-        if(!slot.is_ready_) break;
+    if(reply->isNearlyFull()) {
+        if(this->is_writing_) {
+            this->backlog_.push_back(reply);
+            this->current_reply_.reset();
 
-        // reply->appendStatic(slot.data_.data(), slot.data_.size());
-        reply->appendString(std::move(slot.data_));
-        this->pending_responses_.pop_front();
-
-        if(reply->isNearlyFull()) {
-            if(this->is_writing_) {
-                this->backlog_.push_back(reply);
-                this->current_reply_.reset();
-
-            } else {
-                this->flushWriteBatch();
-            }
-
-            if (!this->connected()) {
-                return;
-            }
-
-            if (!this->connected()) return;
-            reply = this->getCurrentReplyBuffer();
-            if (!reply) break;
-        }
-    }
-
-    if(this->current_reply_ && this->current_reply_->total_bytes_ > 0) {
-        if(!this->is_writing_) {
+        } else {
             this->flushWriteBatch();
         }
+
+        if (!this->connected()) return false;
+        reply = this->getCurrentReplyBuffer();
+        if (!reply) return false;
+    }
+
+    return true;
+}
+
+void TcpConnection::flushWriteBatch() {
+    if(this->state_ == StateE::kConnected) {
+        if(this->loop_->isInLoopThread()) {
+            
+            send_start();
+
+        } else {
+            this->loop_->runInLoop([conn = shared_from_this()] () {
+
+                conn->send_start();
+            });
+        }
+    }
+}
+
+void TcpConnection::send_start() {
+    if(this->loop_->ring() == nullptr) return;
+
+    if(!this->backlog_.empty()) {
+        this->writing_reply_ = this->backlog_.front();
+        this->backlog_.pop_front();
+
+    } else if(this->current_reply_ && this->current_reply_->total_bytes_ > 0) {
+        this->writing_reply_ = this->current_reply_;
+        this->current_reply_.reset();
+
+    } else {
+        return;
+    }
+
+    if(!this->connected() || this->writing_reply_->mempool_ == nullptr) {
+        this->writing_reply_.reset();
+        return;
+    }
+
+    this->is_writing_ = true;
+
+    io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
+    int index = this->getFixedIndex();
+
+    if(!sqe) {
+        if(this->writing_reply_) {
+            this->backlog_.push_front(this->writing_reply_);
+            this->writing_reply_.reset();
+        }
+
+        this->is_writing_ = false;
+        return;
+    }
+    
+    if(index < 0 || this->loop_->getFixedFds()[index] < 0) {
+        this->writing_reply_.reset(); 
+        this->forceClose();
+        return;
+    }
+
+    io_uring_prep_writev(sqe, index, this->writing_reply_->iovs_, this->writing_reply_->iov_cnt_, 0);
+    sqe->flags |= IOSQE_FIXED_FILE;
+    io_uring_sqe_set_data(sqe, this->writing_reply_.get());
+}
+
+void TcpConnection::send_schedul(int res_bytes) {
+    if(res_bytes <= 0) {
+        if(res_bytes == -EAGAIN || res_bytes == -EWOULDBLOCK) {
+            io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
+
+            int index = this->getFixedIndex();
+            if(index >= 0 && this->loop_->getFixedFds()[index] >= 0) {
+                io_uring_prep_writev(sqe, index, 
+                    &this->writing_reply_->iovs_[this->writing_reply_->iov_start_idx_], 
+                    this->writing_reply_->iov_cnt_ - this->writing_reply_->iov_start_idx_, 0);
+                sqe->flags |= IOSQE_FIXED_FILE;
+                io_uring_sqe_set_data(sqe, this->writing_reply_.get());
+                return;
+            }
+        }
+
+        forceClose();
+        return;
+    }
+
+    if(!this->writing_reply_) return;
+
+    if(res_bytes == this->writing_reply_->total_bytes_) {
+        this->writing_reply_.reset();
+        this->is_writing_ = false;
+
+        if(!this->backlog_.empty() || (this->current_reply_ && this->current_reply_->total_bytes_ > 0)) {
+            this->send_start();
+        }
+        
+    } else if(res_bytes > 0 && res_bytes < this->writing_reply_->total_bytes_) {
+        this->writing_reply_->adjustForPartialWrite(res_bytes);
+
+        io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
+
+        int index = this->getFixedIndex();
+
+        if(index < 0 || this->loop_->getFixedFds()[index] < 0) {
+            this->forceClose();
+            return;
+        }
+
+        io_uring_prep_writev(sqe, index, &this->writing_reply_->iovs_[this->writing_reply_->iov_start_idx_], 
+        this->writing_reply_->iov_cnt_ - this->writing_reply_->iov_start_idx_, 0);
+        sqe->flags |= IOSQE_FIXED_FILE;
+        io_uring_sqe_set_data(sqe, this->writing_reply_.get());
     }
 }
 
@@ -191,13 +252,6 @@ void TcpConnection::start() {
 
     this->close_req_ = std::make_unique<CloseRequest>(shared_from_this());
     close_req_->setType(IoType::CLOSE);
-
-    // io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-    // if(!sqe) {
-    //     io_uring_submit(this->loop_->ring());
-
-    //     sqe = io_uring_get_sqe(this->loop_->ring());
-    // }
 
     io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
 
@@ -322,8 +376,6 @@ void TcpConnection::handleClose() {
         // this->replyBufPool_->release(this->current_reply_);
         this->current_reply_.reset();
     }
-
-    this->pending_responses_.clear();
 
     if(int index = getFixedIndex()) {
         int remove_fd = -1;
@@ -458,12 +510,6 @@ void TcpConnection::send(const char* data, std::size_t len) {
 
     this->appendToPendingWrite(data, len);
 
-    // io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-    // if(!sqe) {
-    //     io_uring_submit(this->loop_->ring());
-    //     sqe = io_uring_get_sqe(this->loop_->ring());
-    // }
-
     io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
 
     int index = this->getFixedIndex();
@@ -481,12 +527,6 @@ void TcpConnection::send(const char* data, std::size_t len) {
 
 void TcpConnection::send() {
     if(!this->connected()) return;
-
-    // io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-    // if(!sqe) {
-    //     io_uring_submit(this->loop_->ring());
-    //     sqe = io_uring_get_sqe(this->loop_->ring());
-    // }
 
     io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
 
@@ -566,137 +606,6 @@ void TcpConnection::forceClose() {
         }
 
         ::shutdown(fd(), SHUT_RDWR);
-    }
-}
-
-void TcpConnection::flushWriteBatch() {
-    if(this->state_ == StateE::kConnected) {
-        if(this->loop_->isInLoopThread()) {
-            
-            send_start();
-
-        } else {
-            this->loop_->runInLoop([conn = shared_from_this()] () {
-
-                conn->send_start();
-            });
-        }
-    }
-}
-
-void TcpConnection::send_start() {
-    if(this->loop_->ring() == nullptr) return;
-
-    if(!this->backlog_.empty()) {
-        this->writing_reply_ = this->backlog_.front();
-        this->backlog_.pop_front();
-
-    } else if(this->current_reply_ && this->current_reply_->total_bytes_ > 0) {
-        this->writing_reply_ = this->current_reply_;
-        this->current_reply_.reset();
-
-    } else {
-        return;
-    }
-
-    if(!this->connected() || this->writing_reply_->mempool_ == nullptr) {
-        this->writing_reply_.reset();
-        return;
-    }
-
-    this->is_writing_ = true;
-
-    // io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-    // if(!sqe) {
-    //     io_uring_submit(this->loop_->ring());
-    //     sqe = io_uring_get_sqe(this->loop_->ring());
-    // }
-
-    io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
-
-    int index = this->getFixedIndex();
-
-    if(!sqe) {
-        if(this->writing_reply_) {
-            this->backlog_.push_front(this->writing_reply_);
-            this->writing_reply_.reset();
-        }
-
-        this->is_writing_ = false;
-        return;
-    }
-    
-    if(index < 0 || this->loop_->getFixedFds()[index] < 0) {
-        this->writing_reply_.reset(); 
-        this->forceClose();
-        return;
-    }
-
-    // GeneralHead* head_ptr = static_cast<GeneralHead*>(this->writing_reply_.get());
-    
-    io_uring_prep_writev(sqe, index, this->writing_reply_->iovs_, this->writing_reply_->iov_cnt_, 0);
-    sqe->flags |= IOSQE_FIXED_FILE;
-    io_uring_sqe_set_data(sqe, this->writing_reply_.get());
-}
-
-void TcpConnection::send_schedul(int res_bytes) {
-    if(res_bytes <= 0) {
-        if(res_bytes == -EAGAIN || res_bytes == -EWOULDBLOCK) {
-            // io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-            // if(!sqe) {
-            //     io_uring_submit(this->loop_->ring());
-            //     sqe = io_uring_get_sqe(this->loop_->ring());
-            // }
-
-            io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
-
-            int index = this->getFixedIndex();
-            if(index >= 0 && this->loop_->getFixedFds()[index] >= 0) {
-                io_uring_prep_writev(sqe, index, 
-                    &this->writing_reply_->iovs_[this->writing_reply_->iov_start_idx_], 
-                    this->writing_reply_->iov_cnt_ - this->writing_reply_->iov_start_idx_, 0);
-                sqe->flags |= IOSQE_FIXED_FILE;
-                io_uring_sqe_set_data(sqe, this->writing_reply_.get());
-                return;
-            }
-        }
-
-        forceClose();
-        return;
-    }
-
-    if(!this->writing_reply_) return;
-
-    if(res_bytes == this->writing_reply_->total_bytes_) {
-        this->writing_reply_.reset();
-        this->is_writing_ = false;
-
-        if(!this->backlog_.empty() || (this->current_reply_ && this->current_reply_->total_bytes_ > 0)) {
-            this->send_start();
-        }
-        
-    } else if(res_bytes > 0 && res_bytes < this->writing_reply_->total_bytes_) {
-        this->writing_reply_->adjustForPartialWrite(res_bytes);
-
-        // io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-        // if(!sqe) {
-        //     io_uring_submit(this->loop_->ring());
-        //     sqe = io_uring_get_sqe(this->loop_->ring());
-        // }
-
-        io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
-
-        int index = this->getFixedIndex();
-
-        if(index < 0 || this->loop_->getFixedFds()[index] < 0) {
-            this->forceClose();
-            return;
-        }
-
-        io_uring_prep_writev(sqe, index, &this->writing_reply_->iovs_[this->writing_reply_->iov_start_idx_], 
-        this->writing_reply_->iov_cnt_ - this->writing_reply_->iov_start_idx_, 0);
-        sqe->flags |= IOSQE_FIXED_FILE;
-        io_uring_sqe_set_data(sqe, this->writing_reply_.get());
     }
 }
 

@@ -30,12 +30,6 @@ constexpr std::size_t PENDINGWRITEPOOLSIZE  = 4096;
 
 class EventLoop;
 
-struct ResponseSlot {
-    uint64_t id_{0};
-    bool is_ready_{false};
-    std::string data_;
-};
-
 enum class ConnState {
     HANDSHAKING,  // 刚连上的初始状态
     NORMAL_CLIENT,// 普通客户端
@@ -66,11 +60,8 @@ public:
     ReplyBufferPtr getCurrentReplyBuffer();
     void send_start();
     void send_schedul(int res_bytes);
-    uint64_t appendPendRes(ResponseSlot&);
-    void fillSingleSlot(uint64_t slot_id, std::string&& data);
-    void fillPendingSlots(std::vector<std::pair<std::string, uint64_t>>&&);
-    // ResponseSlot* getLastPendingSlot();
-    void tryFlushResponses();
+
+    bool tryFillReplyBuffer(std::string&);
 
     bool connected() const;
     bool disconnected() const;
@@ -90,8 +81,6 @@ public:
     const std::any& getContext() const;
     std::any* getMutableContext();
     int getFixedIndex() const;
-    std::vector<RouteBatch>& route_batches();
-    int pendResIndex();
 
     void handleRead(int res_bytes);
     void handleWrite();
@@ -140,14 +129,10 @@ private:
     ReplyBufferPtr writing_reply_;
     std::unique_ptr<PendingWrite> send_pending_;
     std::deque<ReplyBufferPtr> backlog_;
-    std::deque<ResponseSlot> pending_responses_;
     bool is_replica_{false};
     bool need_reply_{true};
     bool is_writing_{false};
     std::size_t replica_offset_{0};
-    uint64_t next_slot_id_{1};
-
-    std::vector<RouteBatch> route_batches_;
 
     MessageCallback messageCallback_;
     CloseCallback closeCallback_;
