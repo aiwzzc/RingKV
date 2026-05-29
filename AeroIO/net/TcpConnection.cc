@@ -154,6 +154,9 @@ void TcpConnection::flushWriteBatch() {
 void TcpConnection::send_start() {
     if(this->loop_->ring() == nullptr) return;
 
+    if(this->is_writing_ == true) return;
+    this->is_writing_ = true;
+
     if(!this->backlog_.empty()) {
         this->writing_reply_ = this->backlog_.front();
         this->backlog_.pop_front();
@@ -170,8 +173,6 @@ void TcpConnection::send_start() {
         this->writing_reply_.reset();
         return;
     }
-
-    this->is_writing_ = true;
 
     io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
     int index = this->getFixedIndex();

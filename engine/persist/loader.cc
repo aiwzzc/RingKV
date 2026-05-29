@@ -23,7 +23,7 @@ namespace {
     
 };
 
-using AeroIO::net::EventLoop;
+// using AeroIO::net::EventLoop;
 
 namespace rkv {
 

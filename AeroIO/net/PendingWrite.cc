@@ -184,7 +184,7 @@ void ReplyBuffer::appendString(std::string&& data) {
     std::size_t len = data.size();
     if(len == 0) return;
 
-    if(len < 128 && this->inline_offset_ + len <= MAX_IOV_COUNT) {
+    if(len < 128 && this->inline_offset_ + len <= META_BUF_SIZE) {
         char* start = this->inline_buf_ + this->inline_offset_;
         ::memcpy(start, data.data(), len);
 
