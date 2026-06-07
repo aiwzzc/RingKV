@@ -709,7 +709,7 @@ ReplBacklog* EventLoop::replBacklog()
 { return &this->repl_backlog_; }
 
 void EventLoop::loop() {
-    LOG_INFO("loop begin");
+    // LOG_INFO("loop begin");
 
     this->armWakeupFd();
 

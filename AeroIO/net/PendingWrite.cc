@@ -164,7 +164,7 @@ void PendingWritePool::reset(PendingWrite* pw) {
 
 ReplyBuffer::ReplyBuffer(rkv::JemallocWrapper* mempool) : 
 mempool_(mempool) {
-    this->string_holders_.reserve(MAX_IOV_COUNT);
+    // this->string_holders_.reserve(MAX_IOV_COUNT);
 }
 
 void ReplyBuffer::setType(IoType type)

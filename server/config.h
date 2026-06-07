@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 
 namespace rkv {
 
@@ -10,23 +11,10 @@ enum class AofSyncType {
     EVERYSEC, NO
 };
 
-class Config {
-
-public:
-    Config() = default;
-
-    static Config& getInstance() {
-        static Config instance;
-        return instance;
-    }
-
-    Config(const Config&) = delete;
-    Config& operator=(const Config&) = delete;
-
-public:
+struct Config {
     std::string ip_;
     int port_ = 5005;
-    int worker_threads_;
+    int shard_threads_;
 
     bool aof_enabled_;
     AofSyncType aof_sync_type_;
@@ -38,11 +26,20 @@ public:
     bool is_master_;
     std::string master_ip_;
     int master_port_;
+};
 
-    bool http_enable_;
-    int httpServer_port = 8080;
+class ConfigBuilder {
 
-    void configParser(const char* filename = ConfigFilePath);
+public:
+    ConfigBuilder(int argc, char* argv[]);
+
+    Config Build();
+    void ApplyOverride(Config& config);
+
+private:
+    std::string config_path_;
+    std::unordered_map<std::string, std::string> args_;
+
 };
 
 };

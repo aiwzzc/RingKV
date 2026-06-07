@@ -1,7 +1,6 @@
 #include "protocolhandler.h"
 #include "RouteBatchTask.h"
 #include "ringClient.h"
-#include "config.h"
 #include "CommandHandlers.h"
 
 #include "net/TcpConnection.h"
@@ -12,8 +11,10 @@
 #include "core/engine.h"
 #include "ds/kvstr.h"
 #include "respresstr.h"
+#include "Log/LogApi.h"
 
 #include <charconv>
+#include <cstdint>
 #include <memory>
 #include <string_view>
 #include <cstring>
@@ -114,7 +115,10 @@ using AeroIO::net::EventLoop;
 
 namespace rkv {
 
-KvsProtocolHandler::KvsProtocolHandler(Ringengine* engine) : engine_(engine) {}
+Config KvsProtocolHandler::config_{};
+
+KvsProtocolHandler::KvsProtocolHandler(Ringengine* engine) : 
+engine_(engine) {}
 
 std::string KvsProtocolHandler::dumpObjectToResp(const std::string_view& key, RedisObject* obj) {
     switch(obj->type) {
@@ -221,25 +225,23 @@ void KvsProtocolHandler::executeCommandAndPersist(CommandContext& ctx, const Com
         std::string intact_cmd = to_resp_string(ctx.tokens_);
 
         if(ctx.is_runInloop_) {
-            Config& config = Config::getInstance();
 
-            if(config.cluster_enabled_ && config.is_master_) {
+            if(config_.cluster_enabled_ && config_.is_master_) {
                 ctx.curr_loop_->appendReplicationBacklog(intact_cmd);
             }
 
-            if(config.aof_enabled_) {
+            if(config_.aof_enabled_) {
                 ctx.target_loop_->appendAof(intact_cmd.data(), intact_cmd.size());
             }
 
 
         } else {
-            Config& config = Config::getInstance();
 
-            if(config.cluster_enabled_ && config.is_master_) {
+            if(config_.cluster_enabled_ && config_.is_master_) {
                 ctx.curr_loop_->appendReplicationBacklog(intact_cmd);
             }
 
-            if(config.aof_enabled_) {
+            if(config_.aof_enabled_) {
                 ctx.curr_loop_->appendAof(intact_cmd.data(), intact_cmd.size());
             }
         }
@@ -265,7 +267,7 @@ void KvsProtocolHandler::dispatch_command(
         CommandContext ctx{tokens_view, this->engine_, false, curr_loop, curr_loop, "", false};
         this->executeCommandAndPersist(ctx, cmd_def);
 
-        if(need_reply) client->fillSingleSlot(current_slot_id, std::move(ctx.response_));
+        if(need_reply) client->fillSingleSlot(current_slot_id, std::move(ctx.response_), 1);
 
     } else {
 
@@ -276,7 +278,8 @@ void KvsProtocolHandler::dispatch_command(
             if(curr_loop == target_loop) {
                 if(local_notwrite_cache.contains(tokens_view[1]) && !cmd_def->is_write_) {
                     std::string hot_data = local_notwrite_cache[tokens_view[1]];
-                    if(need_reply) client->fillSingleSlot(current_slot_id, std::move(hot_data));
+                    if(need_reply) client->fillSingleSlot(current_slot_id, std::move(hot_data), 2);
+                    
                     return;
 
                 } else if(cmd_def->is_write_) {
@@ -291,7 +294,7 @@ void KvsProtocolHandler::dispatch_command(
                 this->executeCommandAndPersist(ctx, cmd_def);
                 if(!cmd_def->is_write_) local_notwrite_cache[tokens_view[1]] = ctx.response_;
 
-                if(need_reply) client->fillSingleSlot(current_slot_id, std::move(ctx.response_));
+                if(need_reply) client->fillSingleSlot(current_slot_id, std::move(ctx.response_), 3);
 
             } else {
                 client->route_cmds_per_loop()[target_index].emplace_back(std::move(tokens_view), current_slot_id, args, cmd_def);
@@ -373,6 +376,9 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
         auto& buffer = *it;
 
         if(!conn->fragmented_buffer_.empty()) {
+
+            LOG_INFO("fragmented_buffer path");
+
             conn->fragmented_buffer_.append(buffer->peek(), buffer->readableBytes());
             buffer->retrieveAll();
 
@@ -406,7 +412,7 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
                 }
 
                 if(!cmd_def) {
-                    if(need_reply) client->fillSingleSlot(current_slot_id, UNKNOWNCOMMANDSTR);
+                    if(need_reply) client->fillSingleSlot(current_slot_id, UNKNOWNCOMMANDSTR, 0);
 
                     continue;
                 }
@@ -414,7 +420,7 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
                 if((cmd_def->arity_ > 0 && tokens.size() != cmd_def->arity_)||
                     (cmd_def->arity_ < 0 && tokens.size() < -cmd_def->arity_)) {
 
-                    if(need_reply) client->fillSingleSlot(current_slot_id, WRONGNUMBERSTR);
+                    if(need_reply) client->fillSingleSlot(current_slot_id, WRONGNUMBERSTR, 0);
 
                     continue;
                 }
@@ -480,12 +486,12 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
             uint64_t current_slot_id = 0;
 
             if(need_reply) {
-                ResponseSlot slot;
+                ResponseSlot slot{0, false};
                 current_slot_id = client->appendPendRes(slot);
             }
 
             if(!cmd_def) {
-                if(need_reply) client->fillSingleSlot(current_slot_id, UNKNOWNCOMMANDSTR);
+                if(need_reply) client->fillSingleSlot(current_slot_id, UNKNOWNCOMMANDSTR, 0);
 
                 buffer->retrieve(pos);
                 continue;
@@ -494,7 +500,7 @@ int KvsProtocolHandler::handleProto(const AeroIO::net::TcpConnectionPtr& conn, A
             if((cmd_def->arity_ > 0 && tokens_view.size() != cmd_def->arity_)||
                 (cmd_def->arity_ < 0 && tokens_view.size() < -cmd_def->arity_)) {
 
-                if(need_reply) client->fillSingleSlot(current_slot_id, WRONGNUMBERSTR);
+                if(need_reply) client->fillSingleSlot(current_slot_id, WRONGNUMBERSTR, 0);
 
                 buffer->retrieve(pos);
                 continue;
@@ -518,7 +524,7 @@ EXECUTE_LOCAL_WRITES:
 
         for(auto& slot_id : delay_write.slot_indexs_) {
             std::string delay_res = ctx.response_;
-            if(need_reply) client->fillSingleSlot(slot_id, std::move(delay_res));
+            if(need_reply) client->fillSingleSlot(slot_id, std::move(delay_res), 4);
         }
     }
 
@@ -537,7 +543,6 @@ END_PARSE:
         EventLoop* target_loop = (*LoopsEngines)[i].first;
 
         RouteBatchTaskPtr task = RouteBatchTaskPool::getInstance().get(curr_loop);
-        // task->conn_ = conn;
         task->clinet_ = client;
         task->current_loop_ = curr_loop;
         task->target_engine_ = target_engine;

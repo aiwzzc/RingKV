@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <vector>
+#include <deque>
 #include <sys/uio.h>
 
 #include "IoRequest.h"
@@ -122,7 +123,7 @@ struct ReplyBuffer {
     std::size_t iov_start_idx_;
 
     rkv::JemallocWrapper* mempool_;
-    std::vector<std::string> string_holders_;
+    std::deque<std::string> string_holders_;
 
     ReplyBuffer(rkv::JemallocWrapper*);
 

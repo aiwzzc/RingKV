@@ -41,7 +41,7 @@ public:
 
     friend class RingKVServer;
 
-    kvserver();
+    kvserver(Config& config);
 
     void start();
     void onMessage(const AeroIO::net::TcpConnectionPtr& conn, AeroIO::net::Buffers& buf);
@@ -50,6 +50,7 @@ public:
     Config* getConfig() const;
 
 private:
+    Config config_;
     JemallocWrapper mempool_{};
     rdict engine_;
     KvsProtocolHandler protocol_;
@@ -64,7 +65,7 @@ private:
 class RingKVServer {
 
 public:
-    RingKVServer();
+    RingKVServer(Config& config);
     ~RingKVServer();
 
     void start();
@@ -74,7 +75,8 @@ private:
     std::vector<std::thread> workers_;
     // std::unique_ptr<HttpServer> httpServer_;
     
-    std::size_t workers_size_;
+    std::size_t shard_thread_count_{1};
+    Config config_;
 
 };
 

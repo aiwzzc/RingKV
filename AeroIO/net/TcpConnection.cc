@@ -1,5 +1,6 @@
 #include "TcpConnection.h"
 #include "EventLoop.h"
+#include "Log/LogApi.h"
 #include "TcpServer.h"
 
 #include <assert.h>
@@ -22,6 +23,7 @@ io_uring_sqe* get_sqe_safe(io_uring* ring) {
             }
         }
     }
+
     return sqe;
 }
 
@@ -112,7 +114,10 @@ ReplyBufferPtr TcpConnection::getCurrentReplyBuffer() {
 }
 
 bool TcpConnection::tryFillReplyBuffer(std::string& msg) {
-    if (!this->connected()) { return false; }
+    if (this->disconnected()) {
+        LOG_FATAL("conn disconnect");
+        return false;
+    }
 
     ReplyBufferPtr reply = this->getCurrentReplyBuffer();
     if (!reply) return false;
@@ -120,17 +125,8 @@ bool TcpConnection::tryFillReplyBuffer(std::string& msg) {
     reply->appendString(std::move(msg));
 
     if(reply->isNearlyFull()) {
-        if(this->is_writing_) {
-            this->backlog_.push_back(reply);
-            this->current_reply_.reset();
-
-        } else {
-            this->flushWriteBatch();
-        }
-
-        if (!this->connected()) return false;
-        reply = this->getCurrentReplyBuffer();
-        if (!reply) return false;
+        this->backlog_.push_back(reply);
+        this->current_reply_.reset();
     }
 
     return true;
@@ -140,7 +136,7 @@ void TcpConnection::flushWriteBatch() {
     if(this->state_ == StateE::kConnected) {
         if(this->loop_->isInLoopThread()) {
             
-            send_start();
+            if(!this->is_writing_) send_start();
 
         } else {
             this->loop_->runInLoop([conn = shared_from_this()] () {
@@ -154,7 +150,7 @@ void TcpConnection::flushWriteBatch() {
 void TcpConnection::send_start() {
     if(this->loop_->ring() == nullptr) return;
 
-    if(this->is_writing_ == true) return;
+    if(this->is_writing_) return;
     this->is_writing_ = true;
 
     if(!this->backlog_.empty()) {
@@ -166,11 +162,13 @@ void TcpConnection::send_start() {
         this->current_reply_.reset();
 
     } else {
+        this->is_writing_ = false;
         return;
     }
 
     if(!this->connected() || this->writing_reply_->mempool_ == nullptr) {
         this->writing_reply_.reset();
+        this->is_writing_ = false;
         return;
     }
 
@@ -186,9 +184,10 @@ void TcpConnection::send_start() {
         this->is_writing_ = false;
         return;
     }
-    
+
     if(index < 0 || this->loop_->getFixedFds()[index] < 0) {
-        this->writing_reply_.reset(); 
+        this->writing_reply_.reset();
+        this->is_writing_ = false;
         this->forceClose();
         return;
     }
@@ -214,18 +213,24 @@ void TcpConnection::send_schedul(int res_bytes) {
             }
         }
 
+        // this->is_writing_ = false;
         forceClose();
         return;
     }
 
-    if(!this->writing_reply_) return;
+    if(!this->writing_reply_) {
+        // this->is_writing_ = false;
+        return;
+    }
 
     if(res_bytes == this->writing_reply_->total_bytes_) {
         this->writing_reply_.reset();
-        this->is_writing_ = false;
 
         if(!this->backlog_.empty() || (this->current_reply_ && this->current_reply_->total_bytes_ > 0)) {
             this->send_start();
+
+        } else {
+            this->is_writing_ = false;
         }
         
     } else if(res_bytes > 0 && res_bytes < this->writing_reply_->total_bytes_) {

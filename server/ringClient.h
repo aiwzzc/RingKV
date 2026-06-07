@@ -25,8 +25,6 @@ struct RoutedCommand {
     std::string response_data_;
 };
 
-struct RoutedCommand;
-
 using RouteCommandVec = std::vector<RoutedCommand>;
 using RouteCommandPerLoop = std::vector<RouteCommandVec>;
 
@@ -46,9 +44,11 @@ public:
     ~ringClient();
 
     void release();
-    void fillSingleSlot(uint64_t slot_id, std::string&& data);
+    void fillSingleSlot(uint64_t slot_id, std::string&& data, int num);
     uint64_t appendPendRes(ResponseSlot& slot);
     void tryFlushResponses();
+    int slot_size();
+    bool slot_is_ready(int slot_id);
 
     RouteCommandPerLoop& route_cmds_per_loop();
 };

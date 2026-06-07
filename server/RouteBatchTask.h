@@ -18,7 +18,7 @@ struct CommandDef;
 
 using execute_cmd = void(*)(rkv::CommandContext&, const rkv::CommandDef*);
 
-struct RouteBatchTask {
+struct RouteBatchTask : std::enable_shared_from_this<RouteBatchTask> {
 
     struct AeroIO::net::list_head node_;
 
@@ -26,7 +26,6 @@ struct RouteBatchTask {
     int cmd_count_{0};
 
     ringClientPtr clinet_;
-    // AeroIO::net::TcpConnectionPtr conn_;
     rkv::Ringengine* target_engine_;
     AeroIO::net::EventLoop* target_loop_;
     AeroIO::net::EventLoop* current_loop_;

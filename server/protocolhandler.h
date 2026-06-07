@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "ringClient.h"
+#include "config.h"
 
 namespace AeroIO {
 namespace net {
@@ -45,9 +46,14 @@ struct delay_write {
 };
 
 class KvsProtocolHandler {
-private:
 
+private:
     Ringengine* engine_;
+
+public:
+    static Config config_;
+
+private:
     int dispatch(const AeroIO::net::TcpConnectionPtr&, std::vector<std::string_view>&, AeroIO::net::ReplyBuffer*);
     int try_parse_resp(const char*, std::size_t, std::size_t&, std::vector<std::string_view>&);
     static void executeCommandAndPersist(CommandContext& ctx, const CommandDef* def);

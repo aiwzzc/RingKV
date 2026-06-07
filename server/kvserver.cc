@@ -1,6 +1,7 @@
 #include "kvserver.h"
 #include "RouteBatchTask.h"
 
+#include "config.h"
 #include "net/TcpConnection.h"
 #include "persist/loader.h"
 
@@ -10,16 +11,19 @@ namespace rkv {
 
 kvserver::ExpireMap kvserver::expires_{};
 
-kvserver::kvserver() : 
+kvserver::kvserver(Config& config) : 
+    config_(config),
     engine_(&this->mempool_),
     protocol_(&this->engine_),
     context_(&this->mempool_, &this->engine_),
-    Tcpserver_(&this->mempool_, Config::getInstance().port_) {
+    Tcpserver_(&this->mempool_, config.port_) {
+
+        KvsProtocolHandler::config_ = config;
 
         RouteBatchTaskPool& taskPool = RouteBatchTaskPool::getInstance();
         taskPool.setMempool(&this->mempool_);
         taskPool.initPool();
-    }
+}
 
 void kvserver::start() {
 
@@ -32,7 +36,7 @@ void kvserver::start() {
 
 void kvserver::onMessage(const AeroIO::net::TcpConnectionPtr& conn, AeroIO::net::Buffers& blocks) {
 
-    if(Config::getInstance().cluster_enabled_ && Config::getInstance().is_master_ && 
+    if(this->config_.cluster_enabled_ && this->config_.is_master_ && 
         conn->getConnState() == AeroIO::net::ConnState::HANDSHAKING) {
 
         const char* crlf = nullptr;
@@ -101,7 +105,7 @@ AeroIO::net::EventLoop* kvserver::getLoop()
 Ringengine* kvserver::getEngine()
 { return &this->engine_; }
 
-RingKVServer::RingKVServer() = default;
+RingKVServer::RingKVServer(Config& config) : config_(config) {};
 
 RingKVServer::~RingKVServer() {
     for(auto& t : this->workers_) {
@@ -111,18 +115,15 @@ RingKVServer::~RingKVServer() {
 
 void RingKVServer::start() {
 
-    Config& conf = Config::getInstance();
-    conf.configParser();
+    this->shard_thread_count_ = this->config_.shard_threads_ >= 1 ? this->config_.shard_threads_ : 1;
 
-    this->workers_size_ = conf.worker_threads_ >= 1 ? conf.worker_threads_ : 1;
+    auto init_latch = std::make_shared<std::latch>(this->shard_thread_count_ + 1);
 
-    auto init_latch = std::make_shared<std::latch>(this->workers_size_ + 1);
+    this->LoopsEngines_.resize(this->shard_thread_count_);
 
-    this->LoopsEngines_.resize(this->workers_size_);
-
-    for(int i = 0; i < this->workers_size_; ++i) {
+    for(int i = 0; i < this->shard_thread_count_; ++i) {
         this->workers_.emplace_back([this, i, init_latch] () {
-            kvserver server{};
+            kvserver server{this->config_};
 
             this->LoopsEngines_[i] = std::make_pair<AeroIO::net::EventLoop*, Ringengine*>(
                 server.getLoop(), 

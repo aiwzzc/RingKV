@@ -1,7 +1,6 @@
 #include "CommandHandlers.h"
 #include "kvserver.h"
 
-#include "Log/LogApi.h"
 #include "core/engine.h"
 #include "respresstr.h"
 
@@ -175,8 +174,6 @@ void GlobalKeyCoordinator::finalizeResponse() {
 void CommandHandlers::commandCommand(CommandContext& ctx) {
     ctx.success_ = true;
     ctx.response_ = EMPTYARRAYSTR;
-
-    LOG_INFO("commandCommand");
 }
 
 void CommandHandlers::pingCommand(CommandContext& ctx) {

@@ -56,15 +56,17 @@ void RouteBatchTask::operator()() {
         }
     }
 
-    this->current_loop_->runInLoop([this] () mutable {
-        if(this->clinet_) {
-            for(int i = 0; i < this->cmd_count_; ++i) {
-                if(this->cmds[i].slot_id_ != 0) {
-                    this->clinet_->fillSingleSlot(this->cmds[i].slot_id_, std::move(this->cmds[i].response_data_));
+    auto self = shared_from_this();
+
+    this->current_loop_->runInLoop([self] () mutable {
+        if(self->clinet_) {
+            for(int i = 0; i < self->cmd_count_; ++i) {
+                if(self->cmds[i].slot_id_ != 0) {
+                    self->clinet_->fillSingleSlot(self->cmds[i].slot_id_, std::move(self->cmds[i].response_data_), 5);
                 }
             }
 
-            this->clinet_->tryFlushResponses();
+            self->clinet_->tryFlushResponses();
         }
     });
 }
