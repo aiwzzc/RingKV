@@ -5,7 +5,7 @@
 #define JEMALLOC_NO_DEMANGLE 1
 #include <jemalloc/jemalloc.h>
 
-namespace rkv {
+namespace AeroIO::base {
 
 class JemallocWrapper {
 

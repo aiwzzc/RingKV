@@ -4,6 +4,7 @@ add_library(engine_ds ${DS_SRC})
 
 target_include_directories(engine_ds
 PUBLIC
+    ${CMAKE_SOURCE_DIR}/engine
     ${CMAKE_SOURCE_DIR}/AeroIO/base
     ${CMAKE_SOURCE_DIR}/third_party/unordered_dense/include
     ${CMAKE_SOURCE_DIR}/third_party/wyhash

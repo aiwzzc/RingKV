@@ -7,7 +7,7 @@ add_library(rkv_lifecycle config.cc WorkerGroup.cc)
 target_include_directories(rkv_lifecycle PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(rkv_lifecycle PUBLIC Threads::Threads)
 
-add_library(rkv_server ${Server_SRC})
+add_library(rkv_server ${Server_SRC} replication/Backlog.cc)
 
 target_include_directories(rkv_server
 PUBLIC
@@ -21,7 +21,5 @@ PUBLIC
     rkv_lifecycle
     aeroIo_net
     engine_core
-    engine_persist
     rkv_protocol
-    hiredis
 )

@@ -10,7 +10,7 @@ namespace AeroIO {
 
 namespace net {
 
-TcpServer::TcpServer(rkv::JemallocWrapper* mempool, int port, AcceptorOption option) : 
+TcpServer::TcpServer(base::JemallocWrapper* mempool, int port, AcceptorOption option) :
     mempool_(mempool), 
     acceptor_(&this->loop_, port, option == AcceptorOption::kReusePort),
     replyBufferPool_(mempool, 10), 
@@ -53,7 +53,6 @@ TcpConnectionPtr TcpServer::addNewConnection(int sockfd) {
     conn->setWriteCompleteCallback(this->writeCompleteCallback_);
     conn->setCloseCallback([this] (const TcpConnectionPtr& conn) {
         this->loop_.runInLoop([this, conn] () {
-            if(conn->IsReplica()) this->loop_.removeFromReplicas_(conn);
             this->connections_.erase(conn->fd());
             conn->connectDestroyed();
         });
@@ -97,8 +96,6 @@ void TcpServer::setWriteCompleteCallback(const WriteCompleteCallback& cb)
 TcpServer::~TcpServer() { quiesce(); }
 
 void TcpServer::prepare(const std::string& ip) {
-    loop_.setTcpServer(this);
-    loop_.setLoopsEngines(LoopsEngines_);
     acceptor_.prepare(ip);
     loop_.prepare();
 }
@@ -117,12 +114,5 @@ void TcpServer::quiesce() noexcept {
 EventLoop* TcpServer::getLoop()
 { return &this->loop_; }
 
-void TcpServer::setLoopsEngines(LoopsEngines LoopsEngines)
-{ this->LoopsEngines_ = LoopsEngines; }
-
-TcpServer::LoopsEngines TcpServer::getLoopsEngines() 
-{ return this->LoopsEngines_; }
-
-};
-
-};
+}
+}

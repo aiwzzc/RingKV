@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Allocator.h"
+
 #include <unordered_map>
 #include <vector>
 #include <functional>
@@ -17,7 +19,7 @@ struct StringHash {
     }
 };
 
-class JemallocWrapper;
+
 struct RedisObject;
 struct kvstr;
 

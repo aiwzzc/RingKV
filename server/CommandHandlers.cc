@@ -1,4 +1,5 @@
 #include "CommandHandlers.h"
+#include "ShardRouter.h"
 
 #include "core/engine.h"
 #include "respresstr.h"
@@ -210,20 +211,8 @@ void CommandHandlers::timeout_exist_delete(std::string_view key, Ringengine* eng
 }
 
 void CommandHandlers::flushallCommand(CommandContext& ctx) {
-    auto* LoopsEngines = ctx.curr_loop_->getLoopsEngines();
-
-    for(auto& [loop, engine] : (*LoopsEngines)) {
-        if(loop == ctx.curr_loop_) continue;
-
-        loop->runInLoop([engine] () {
-            engine->expires().getUnderlyingMap().clear();
-            engine->flushall();
-        });
-    }
-
-    ctx.engine_->expires().getUnderlyingMap().clear();
-    ctx.engine_->flushall();
-
+    ctx.router_.broadcast([](Ringengine& engine) { engine.flushall(); });
+    ctx.success_ = true;
     ctx.response_ = OKSTR;
 }
 

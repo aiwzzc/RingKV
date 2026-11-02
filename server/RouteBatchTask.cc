@@ -1,8 +1,6 @@
 #include "RouteBatchTask.h"
 #include "CommandHandlers.h"
 
-#include "base/jemalloc.h"
-
 using namespace AeroIO::net;
 
 namespace rkv {
@@ -10,7 +8,7 @@ namespace rkv {
 void RouteBatchTask::reset() {
     for (int i = 0; i < cmd_count_; ++i) {
         cmds[i].tokens_.clear();
-        cmds[i].buffer_ = std::string{};
+        cmds[i].buffer_ = AeroIO::net::BlockPtr{};
         cmds[i].response_data_.clear();
     }
 
@@ -35,7 +33,7 @@ void RouteBatchTask::operator()() {
             continue;
         }
 
-        rkv::CommandContext ctx{cmds[i].tokens_, this->target_engine_, true, this->current_loop_, this->target_loop_, "", false};
+        rkv::CommandContext ctx{cmds[i].tokens_, this->target_engine_, *this->router_, "", false};
 
         this->execute_(ctx, cmds[i].cmd_def_);
         if(cmds[i].slot_id_ != 0) {
@@ -45,7 +43,7 @@ void RouteBatchTask::operator()() {
     }
 
     for(auto it = local_last_write_slot.begin(); it != local_last_write_slot.end(); ++it) {
-        rkv::CommandContext ctx{it->second.first, this->target_engine_, true, this->current_loop_, this->target_loop_, "", false};
+        rkv::CommandContext ctx{it->second.first, this->target_engine_, *this->router_, "", false};
         this->execute_(ctx, this->cmds[it->second.second.back()].cmd_def_);
 
         for(auto& task_index : it->second.second) {

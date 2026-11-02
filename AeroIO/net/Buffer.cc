@@ -118,45 +118,6 @@ const char* UringBuffer::find(const char* token, std::size_t token_len) {
     return nullptr;
 }
 
-ReplBacklog::ReplBacklog(uint64_t capacity) : capacity_(capacity) {
-    this->buffer_.resize(capacity);
-}
-
-uint64_t ReplBacklog::getMasterOffset() const
-{ return this->master_offset_; }
-
-uint64_t ReplBacklog::getCapacity() const
-{ return this->capacity_; }
-
-SendChunk ReplBacklog::getChunkToSend(uint64_t replica_offset) {
-    if(replica_offset == this->master_offset_) return {nullptr, 0};
-
-    std::size_t unacked = this->master_offset_ - replica_offset;
-    if(unacked > this->capacity_) {
-        return {nullptr, static_cast<std::size_t>(-1)};
-    }
-
-    std::size_t index = replica_offset % this->capacity_;
-
-    std::size_t send_len = std::min(this->capacity_ - index, unacked);
-    return {this->buffer_.data() + index, send_len};
-}
-
-void ReplBacklog::append(const char* data, uint64_t len) {
-    if(data == nullptr || len < 0) return;
-
-    std::size_t index = this->master_offset_ % this->capacity_;
-
-    uint64_t first_chunk = std::min(len, this->capacity_ - index);
-    ::memcpy(this->buffer_.data() + index, data, first_chunk);
-
-    if(first_chunk < len) {
-        ::memcpy(this->buffer_.data(), data + first_chunk, len - first_chunk);
-    }
-
-    this->master_offset_ += len;
-}
-
 void BufferBlock::reset() {
     this->write_index_ = 0;
     this->read_index_ = 0;
@@ -229,7 +190,7 @@ void BufferBlock::retrieveAll() {
     this->write_index_ = 0;
 }
 
-BlockPool::BlockPool(rkv::JemallocWrapper* mempool) : mempool_(mempool) {}
+BlockPool::BlockPool(base::JemallocWrapper* mempool) : mempool_(mempool) {}
 
 BlockPool::~BlockPool() {
     BufferBlock* block;

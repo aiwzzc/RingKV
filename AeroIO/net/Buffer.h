@@ -1,14 +1,13 @@
 #pragma once
 
+#include "jemalloc.h"
+
 #include <cstddef>
 #include <vector>
 #include <memory>
 
-#include "concurrentqueue/concurrentqueue.h"
+#include "ConcurrentQueue.h"
 
-namespace rkv {
-class JemallocWrapper;
-};
 
 namespace AeroIO {
 
@@ -71,31 +70,6 @@ private:
     std::size_t writerIndex_;
 };
 
-struct SendChunk {
-
-    const char* data_;
-    std::size_t len_;
-
-};
-
-class ReplBacklog {
-
-private:
-    std::vector<char> buffer_;
-    uint64_t master_offset_;
-    uint64_t capacity_;
-
-public:
-    ReplBacklog(uint64_t capacity = 10 * 1024 * 1024);
-
-    uint64_t getMasterOffset() const;
-    uint64_t getCapacity() const;
-
-    SendChunk getChunkToSend(uint64_t offset);
-    void append(const char* data, uint64_t len);
-
-};
-
 // ============ BufferBlock =============
 constexpr std::size_t BUFFERBLOCKSIZE = 8192;
 
@@ -124,10 +98,10 @@ class BlockPool {
 
 private:
     moodycamel::ConcurrentQueue<BufferBlock*> pool_;
-    rkv::JemallocWrapper* mempool_;
+    base::JemallocWrapper* mempool_;
 
 public:
-    BlockPool(rkv::JemallocWrapper* mempool);
+    BlockPool(base::JemallocWrapper* mempool);
     ~BlockPool();
 
     BlockPtr get();

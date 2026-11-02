@@ -9,7 +9,7 @@ ringClient::ringClient(
     std::size_t loops): 
     conn_(conn), route_cmds_per_loop_(loops) {
 
-    this->need_reply_ = this->conn_->NeedReply();
+
 }
 
 ringClient::~ringClient() {
@@ -26,7 +26,9 @@ RouteCommandPerLoop& ringClient::route_cmds_per_loop() {
 }
 
 void ringClient::fillSingleSlot(uint64_t slot_id, std::string&& data, int num) {
-    assert(conn_->getLoop()->isInLoopThread());
+    auto conn = conn_.lock();
+    if (!conn || conn->disconnected()) return;
+    assert(conn->getLoop()->isInLoopThread());
 
     if(slot_id == 0) LOG_FATAL("fillSingleSlot Slot_id == 0");
     
@@ -40,7 +42,7 @@ void ringClient::fillSingleSlot(uint64_t slot_id, std::string&& data, int num) {
     } else {
         LOG_FATAL("number:{} slot_id:{} front_id:{} size:{} next_slot_id:{} client_ptr:{} conn_fd:{}",
         num, slot_id, front_id, pending_responses_.size(),
-        this->next_slot_id_, (void*)this, conn_->fd());
+        this->next_slot_id_, (void*)this, conn->fd());
     }
 }
 
@@ -68,18 +70,20 @@ bool ringClient::slot_is_ready(int slot_id) {
 }
 
 void ringClient::tryFlushResponses() {
+    auto conn = conn_.lock();
+    if (!conn || !conn->connected()) return;
     while(!this->pending_responses_.empty()) {
         auto& slot = this->pending_responses_.front();
         if(!slot.is_ready_) break;
 
-        if(!this->conn_->tryFillReplyBuffer(slot.data_)) {
+        if(!conn->tryFillReplyBuffer(slot.data_)) {
             // LOG_INFO("tryFillReplyBuffer false");
             break;
         }
         this->pending_responses_.pop_front();
     }
 
-    this->conn_->flushWriteBatch();
+    conn->flushWriteBatch();
 }
 
 };

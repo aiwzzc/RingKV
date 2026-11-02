@@ -27,14 +27,13 @@ using BlockPtr = std::shared_ptr<BufferBlock>;
 namespace rkv {
 
 class Ringengine;
+class ShardRouter;
 
 struct CommandContext {
 
     std::vector<std::string_view>& tokens_;
     Ringengine* engine_;
-    bool is_runInloop_;
-    AeroIO::net::EventLoop* curr_loop_;
-    AeroIO::net::EventLoop* target_loop_;
+    ShardRouter& router_;
     std::string response_;
     bool success_;
 
@@ -59,7 +58,7 @@ struct CommandDef {
 
 };
 
-using Args = std::variant<AeroIO::net::BlockPtr, std::string>;
+using Args = std::variant<AeroIO::net::BlockPtr, std::shared_ptr<const std::string>>;
 
 struct SubTask {
     std::vector<std::string_view> keys_;

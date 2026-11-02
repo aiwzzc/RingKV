@@ -1,19 +1,16 @@
 #pragma once
 
 #include <memory>
-#include <vector>
 
 #include "net/TcpServer.h"
 
 #include "protocolhandler.h"
 #include "config.h"
-#include "ServerContext.h"
+#include "ShardRouter.h"
 #include "RouteBatchTask.h"
 #include "WorkerGroup.h"
 
 #include "core/engine.h"
-#include "base/jemalloc.h"
-#include "ds/dict.h"
 
 using AeroIO::net::TcpServer;
 
@@ -34,8 +31,7 @@ namespace rkv {
 class kvserver : public Worker {
 
 public:
-    using Topology = std::vector<std::pair<AeroIO::net::EventLoop*, Ringengine*>>;
-    kvserver(const Config& config, std::size_t index, Topology& topology);
+    kvserver(const Config& config, std::size_t index, ShardRouter& router);
     void prepare() override;
     void run() override;
     void requestStop() noexcept override;
@@ -51,10 +47,9 @@ private:
     RouteBatchTaskPool task_pool_;
     rdict engine_;
     KvsProtocolHandler protocol_;
-    ServerContext context_;
     TcpServer Tcpserver_;
     std::size_t index_;
-    Topology& topology_;
+    ShardRouter& router_;
 
 };
 
@@ -69,8 +64,8 @@ public:
 
 private:
     const Config config_;
-    kvserver::Topology topology_;
-    // Last member: workers are stopped before topology/configuration disappear.
+    ShardRouter router_;
+    // Last member: workers are stopped before router/configuration disappear.
     WorkerGroup workers_;
 };
 }

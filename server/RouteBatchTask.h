@@ -3,9 +3,8 @@
 #include <memory>
 
 #include "ringClient.h"
+#include "Allocator.h"
 
-#include "net/PendingWrite.h"
-#include "net/Buffer.h"
 #include "net/EventLoop.h"
 #include "net/TcpConnection.h"
 
@@ -15,6 +14,8 @@ namespace rkv {
 
 struct CommandContext;
 struct CommandDef;
+class ShardRouter;
+class Ringengine;
 
 using execute_cmd = void(*)(rkv::CommandContext&, const rkv::CommandDef*);
 
@@ -27,7 +28,7 @@ struct RouteBatchTask : std::enable_shared_from_this<RouteBatchTask> {
 
     ringClientPtr clinet_;
     rkv::Ringengine* target_engine_;
-    AeroIO::net::EventLoop* target_loop_;
+    ShardRouter* router_;
     AeroIO::net::EventLoop* current_loop_;
     execute_cmd execute_;
 

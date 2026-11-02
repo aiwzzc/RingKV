@@ -9,13 +9,15 @@
 
 namespace rkv {
 
+struct CommandDef;
+
 struct ResponseSlot {
     uint64_t id_{0};
     bool is_ready_{false};
     std::string data_;
 };
 
-using Args = std::variant<AeroIO::net::BlockPtr, std::string>;
+using Args = std::variant<AeroIO::net::BlockPtr, std::shared_ptr<const std::string>>;
 
 struct RoutedCommand {
     std::vector<std::string_view> tokens_;
@@ -31,10 +33,10 @@ using RouteCommandPerLoop = std::vector<RouteCommandVec>;
 class ringClient {
 
 private:
-    AeroIO::net::TcpConnectionPtr conn_;
+    std::weak_ptr<AeroIO::net::TcpConnection> conn_;
     RouteCommandPerLoop route_cmds_per_loop_;
     std::deque<ResponseSlot> pending_responses_;
-    bool need_reply_{true};
+    std::string fragmented_input_;
     uint64_t next_slot_id_{1};
 
 public:
@@ -44,6 +46,7 @@ public:
     ~ringClient();
 
     void release();
+    std::string& fragmentedInput() { return fragmented_input_; }
     void fillSingleSlot(uint64_t slot_id, std::string&& data, int num);
     uint64_t appendPendRes(ResponseSlot& slot);
     void tryFlushResponses();

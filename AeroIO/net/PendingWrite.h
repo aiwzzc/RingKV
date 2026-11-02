@@ -1,5 +1,7 @@
 #pragma once
 
+#include "jemalloc.h"
+
 #include <memory>
 #include <vector>
 #include <deque>
@@ -8,11 +10,6 @@
 #include "IoRequest.h"
 #include "common.h"
 
-namespace rkv {
-
-class JemallocWrapper;
-
-};
 
 namespace AeroIO {
 
@@ -54,54 +51,6 @@ inline void list_del(list_head* node) {
 #define MAX_IOV_COUNT 4096
 #define META_BUF_SIZE 4096
 
-struct PendingWrite {
-    GeneralHead head_;
-    struct list_head node_;
-
-    TcpConnectionPtr conn_;
-    bool in_used_;
-
-    char inline_buf_[META_BUF_SIZE]; 
-    std::size_t inline_offset_ = 0;
-
-    std::vector<void*> dynamic_allocated_ptrs_;
-
-    struct iovec iovs_[MAX_IOV_COUNT];
-    int iov_cnt_;
-    std::size_t total_bytes_;
-    std::size_t iov_start_idx_;
-    rkv::JemallocWrapper* mempool_;
-
-    PendingWrite(rkv::JemallocWrapper* mempool);
-    ~PendingWrite();
-
-    void onComplete(int res_bytes);
-    void setType(IoType type);
-    void append(const char*, std::size_t);
-    void reset();
-    void adjustForPartialWrite(std::size_t write_bytes);
-};
-
-using PendingWritePtr = std::shared_ptr<PendingWrite>;
-
-class PendingWritePool {
-
-public:
-    PendingWritePool(rkv::JemallocWrapper* mempool, std::size_t pool_size);
-    ~PendingWritePool();
-
-    PendingWritePtr get();
-    void release(PendingWrite* pw);
-    void initPool();
-
-private:
-    void reset(PendingWrite* pw);
-
-    struct list_head free_list_;
-    std::size_t pool_size_;
-    rkv::JemallocWrapper* mempool_;
-};
-
 // ============ ReplyBuffer =============
 
 struct ReplyBuffer {
@@ -122,10 +71,10 @@ struct ReplyBuffer {
     std::size_t total_bytes_;
     std::size_t iov_start_idx_;
 
-    rkv::JemallocWrapper* mempool_;
+    base::JemallocWrapper* mempool_;
     std::deque<std::string> string_holders_;
 
-    ReplyBuffer(rkv::JemallocWrapper*);
+    ReplyBuffer(base::JemallocWrapper*);
 
     void setType(IoType type);
     void setConn(TcpConnectionPtr conn);
@@ -141,7 +90,7 @@ using ReplyBufferPtr = std::shared_ptr<ReplyBuffer>;
 class ReplyBufferPool {
 
 public:
-    ReplyBufferPool(rkv::JemallocWrapper* mempool, std::size_t pool_size);
+    ReplyBufferPool(base::JemallocWrapper* mempool, std::size_t pool_size);
     ~ReplyBufferPool();
 
     ReplyBufferPtr get();
@@ -153,7 +102,7 @@ private:
 
     struct list_head free_list_;
     std::size_t pool_size_;
-    rkv::JemallocWrapper* mempool_;
+    base::JemallocWrapper* mempool_;
 
 };
 

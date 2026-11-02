@@ -9,5 +9,5 @@ PUBLIC
 
 target_link_libraries(engine_persist
 PUBLIC
-    engine_ds
+    engine_core
 )

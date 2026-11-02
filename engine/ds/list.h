@@ -1,11 +1,13 @@
 #pragma once
 
+#include "Allocator.h"
+
 #include <vector>
 #include <string_view>
 
 namespace rkv {
 
-class JemallocWrapper;
+
 struct kvstr;
 struct RedisObject;
 

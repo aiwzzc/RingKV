@@ -6,163 +6,14 @@
 #include <string.h>
 #include <assert.h>
 
-// #include "src/common.h"
-// #include "src/CommandHandlers.h"
-// #include "src/kvstr.h"
 
 namespace AeroIO {
 
 namespace net {
 
-// ========== PendingWrite ==========
-
-PendingWrite::PendingWrite(rkv::JemallocWrapper* mempool):
-mempool_(mempool) {}
-
-PendingWrite::~PendingWrite()
-{ reset(); }
-
-void PendingWrite::setType(IoType type)
-{ this->head_.type_ = type; }
-
-void PendingWrite::append(const char* data, std::size_t len) {
-    if(this->iov_cnt_ >= MAX_IOV_COUNT) return;
-    void* p = nullptr;
-
-    if(this->inline_offset_ + len <= META_BUF_SIZE) {
-        p = this->inline_buf_ + this->inline_offset_;
-        this->inline_offset_ += len;
-
-    } else {
-        p = this->mempool_->alloc(len);
-        if(p == nullptr) return;
-
-        this->dynamic_allocated_ptrs_.push_back(p);
-    }
-
-    ::memcpy(p, data, len);
-
-    this->iovs_[this->iov_cnt_].iov_base = (void*)p;
-    this->iovs_[this->iov_cnt_].iov_len = len;
-
-    ++this->iov_cnt_;
-    this->total_bytes_ += len;
-}
-
-void PendingWrite::reset() {
-    this->iov_cnt_ = 0;
-    this->total_bytes_ = 0;
-    this->iov_start_idx_ = 0;
-
-    for(auto* p : this->dynamic_allocated_ptrs_) {
-        this->mempool_->free(p);
-    }
-
-    this->dynamic_allocated_ptrs_.clear();
-}
-
-void PendingWrite::adjustForPartialWrite(std::size_t write_bytes) {
-    this->total_bytes_ -= write_bytes;
-
-    while(write_bytes >= 0 && this->iov_start_idx_ < this->iov_cnt_) {
-        if(write_bytes >= this->iovs_[this->iov_start_idx_].iov_len) {
-            write_bytes -= this->iovs_[this->iov_start_idx_].iov_len;
-            ++this->iov_start_idx_;
-
-        } else {
-            this->iovs_[this->iov_start_idx_].iov_base = (char*)this->iovs_[this->iov_start_idx_].iov_base + write_bytes;
-            this->iovs_[this->iov_start_idx_].iov_len -= write_bytes;
-
-            write_bytes = 0;
-        }
-    }
-}
-
-void PendingWrite::onComplete(int res_bytes) {
-
-    if(this->conn_ && this->head_.type_ == IoType::HTTP_SEND) {
-        if(res_bytes >= 0) {
-            if(res_bytes == this->total_bytes_) {
-                this->reset();
-
-            } else if(res_bytes < this->total_bytes_) {
-                this->adjustForPartialWrite(res_bytes);
-                this->conn_->send();
-            }
-        }
-    }
-}
-
-PendingWritePool::PendingWritePool(rkv::JemallocWrapper* mempool, std::size_t pool_size):
-mempool_(mempool), pool_size_(pool_size) { INIT_LIST_HEAD(&this->free_list_); initPool(); }
-
-PendingWritePool::~PendingWritePool() {
-    while(this->free_list_.next_ != &this->free_list_) {
-        PendingWrite* pw = container_of(this->free_list_.next_, PendingWrite, node_);
-        list_del(this->free_list_.next_);
-
-        this->mempool_->free(pw);
-    }
-}
-
-PendingWritePtr PendingWritePool::get() {
-    PendingWrite* pw = nullptr;
-    if(this->free_list_.next_ == &this->free_list_) {
-        void* p = this->mempool_->alloc(sizeof(PendingWrite));
-        pw = new (p) PendingWrite(this->mempool_);
-        pw->setType(IoType::HTTP_SEND);
-
-        return std::shared_ptr<PendingWrite>(pw, [this] (PendingWrite* pw) {
-            this->release(pw);
-        });
-    }
-
-    list_head* node = this->free_list_.next_;
-    list_del(node);
-
-    pw = container_of(node, PendingWrite, node_);
-    pw->setType(IoType::HTTP_SEND);
-
-    return std::shared_ptr<PendingWrite>(pw, [this] (PendingWrite* pw) {
-        this->release(pw);
-    });
-}
-
-void PendingWritePool::release(PendingWrite* pw) {
-    if(pw == nullptr) return;
-
-    reset(pw);
-    list_add(&this->free_list_, &pw->node_);
-}
-
-void PendingWritePool::initPool() {
-    for(int i = 0; i < this->pool_size_; ++i) {
-        void* p = this->mempool_->alloc(sizeof(PendingWrite));
-        PendingWrite* pw = new (p) PendingWrite(this->mempool_);
-        pw->setType(IoType::HTTP_SEND);
-
-        list_add(&this->free_list_, &pw->node_);
-    }
-}
-
-void PendingWritePool::reset(PendingWrite* pw) {
-    pw->in_used_ = false;
-    pw->iov_cnt_ = 0;
-    pw->total_bytes_ = 0;
-    pw->iov_start_idx_ = 0;
-
-    for(auto* p : pw->dynamic_allocated_ptrs_) {
-        this->mempool_->free(p);
-    }
-
-    pw->dynamic_allocated_ptrs_.clear();
-
-    pw->conn_.reset();
-}
-
 // ========== ReplyBuffer ==========
 
-ReplyBuffer::ReplyBuffer(rkv::JemallocWrapper* mempool) : 
+ReplyBuffer::ReplyBuffer(base::JemallocWrapper* mempool) :
 head_{IoType::SEND}, in_used_(false), iov_cnt_(0), total_bytes_(0),
 iov_start_idx_(0), mempool_(mempool) {
     // this->string_holders_.reserve(MAX_IOV_COUNT);
@@ -270,7 +121,7 @@ void ReplyBuffer::onComplete(int res_bytes) {
     }
 }
 
-ReplyBufferPool::ReplyBufferPool(rkv::JemallocWrapper* mempool, std::size_t pool_size) :
+ReplyBufferPool::ReplyBufferPool(base::JemallocWrapper* mempool, std::size_t pool_size) :
 mempool_(mempool), pool_size_(pool_size) { INIT_LIST_HEAD(&free_list_); initPool(); }
 
 ReplyBufferPool::~ReplyBufferPool() {

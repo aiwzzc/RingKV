@@ -4,16 +4,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
-
-namespace AeroIO {
-
-namespace net {
-
-class EventLoop;
-
-};
-
-};
+#include <string_view>
 
 namespace rkv {
 
@@ -52,15 +43,13 @@ public:
     friend class RdbLoader;
 
     using HashCallbacks = std::unordered_map<std::string_view, std::function<void(const std::vector<std::string_view>&)>>;
-    using LoopsEnginesPtr = std::vector<std::pair<AeroIO::net::EventLoop*, Ringengine*>>*;
 
-    explicit LoaderManager(Ringengine* engine, LoopsEnginesPtr LoopsEngines);
+    explicit LoaderManager(Ringengine* engine);
     
     void start();
 
 private:
     Ringengine* engine_;
-    LoopsEnginesPtr LoopsEngines_;
     std::unique_ptr<AofLoader> aofLoader_;
     std::unique_ptr<RdbLoader> rdbLoader_;
     HashCallbacks hashCallbacks_;

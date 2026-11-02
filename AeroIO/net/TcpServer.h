@@ -1,5 +1,7 @@
 #pragma once
 
+#include "jemalloc.h"
+
 #include <string>
 #include <unordered_map>
 
@@ -9,13 +11,6 @@
 #include "Acceptor.h"
 #include "PendingWrite.h"
 
-namespace rkv {
-
-class JemallocWrapper;
-class Ringengine;
-class TcpConnection;
-
-};
 
 namespace AeroIO {
 namespace net {
@@ -25,19 +20,13 @@ enum class AcceptorOption { kNoReusePort, kReusePort };
 class TcpServer {
 
 public:
-    friend class TcpConnection;
-
-    using LoopsEngines = std::vector<std::pair<EventLoop*, rkv::Ringengine*>>*;
-
-    TcpServer(rkv::JemallocWrapper*, int, AcceptorOption option = AcceptorOption::kReusePort);
+    TcpServer(base::JemallocWrapper*, int, AcceptorOption option = AcceptorOption::kReusePort);
 
     ~TcpServer();
     void prepare(const std::string& ip);
     void start();
     void quiesce() noexcept;
     EventLoop* getLoop();
-    void setLoopsEngines(LoopsEngines LoopsEngines);
-    LoopsEngines getLoopsEngines();
 
     void setMessageCallback(const MessageCallback&);
     void setConnectionCallback(const ConnectionCallback&);
@@ -49,14 +38,13 @@ public:
 
 private:
 
-    rkv::JemallocWrapper* mempool_;
+    base::JemallocWrapper* mempool_;
     EventLoop loop_{};
     Acceptor acceptor_;
     ReplyBufferPool replyBufferPool_;
     BlockPool blockPool_;
 
     std::string name_;
-    LoopsEngines LoopsEngines_ = nullptr;
 
     MessageCallback messageCallback_;
     ConnectionCallback connectionCallback_;

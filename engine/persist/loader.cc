@@ -1,29 +1,14 @@
 #include "loader.h"
 #include "core/engine.h"
 
-// #include "net/EventLoop.h"
-// #include "config.h"
 
 #include <sys/mman.h>
+#include <algorithm>
+#include <stdexcept>
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
 #include <sys/stat.h>
-
-namespace {
-
-    inline uint64_t stable_hash(std::string_view key) {
-        uint64_t hash = 0xcbf29ce484222325;
-        for (char c : key) {
-            hash ^= c;
-            hash *= 0x100000001b3;
-        }
-        return hash;
-    }
-    
-};
-
-// using AeroIO::net::EventLoop;
 
 namespace rkv {
 
@@ -185,61 +170,9 @@ int RdbLoader::load_from_rdb(const char* filename) {
     return 0;
 }
 
-LoaderManager::LoaderManager(Ringengine* engine, LoopsEnginesPtr LoopsEngines) :
-engine_(engine), LoopsEngines_(LoopsEngines) {
-
-    // this->hashCallbacks_ = {
-    //     {
-    //         "SET",
-    //         [this] (const std::vector<std::string_view>& args) {
-    //             if(args.size() == 3) {
-    //                 std::size_t target_index = stable_hash(args[1]) % this->LoopsEngines_->size();
-    //                 EventLoop* target_loop = (*this->LoopsEngines_)[target_index].first;
-    //                 Ringengine* target_engine = (*this->LoopsEngines_)[target_index].second;
-    //                 EventLoop* curr_loop = EventLoop::getEventLoopOfCurrentThread();
-
-    //                 if(target_loop == curr_loop) {
-    //                     this->engine_->set(args[1], args[2]);
-
-    //                 } else {
-    //                     std::vector<std::string> cmds(args.begin(), args.end());
-    //                     target_loop->runInLoop([target_engine, cmds = std::move(cmds)] () {
-    //                         target_engine->set(cmds[1], cmds[2]);
-    //                     });
-    //                 }
-    //             }
-    //         }
-    //     },
-    //     {
-    //         "LPUSH",
-    //         [this] (const std::vector<std::string_view>& args) {
-                
-    //         }
-    //     }
-    // };
-}
+LoaderManager::LoaderManager(Ringengine* engine) : engine_(engine) {}
 
 void LoaderManager::start() {
-    // if(this->LoopsEngines_ == nullptr) return;
-
-    // this->aofLoader_ = std::make_unique<AofLoader>(this);
-    // this->rdbLoader_ = std::make_unique<RdbLoader>(this);
-    // EventLoop* curr_loop = nullptr;
-
-    // for(auto& [loop, engine] : *this->LoopsEngines_) {
-    //     if(engine == this->engine_) curr_loop = loop;
-    // }
-
-    // if(curr_loop == nullptr || curr_loop->getAofFilePath() == nullptr ||
-    //     curr_loop->getRdbFilePath() == nullptr) return;
-
-    // if(Config::getInstance().aof_enabled_) {
-    //     this->aofLoader_->load_from_aof(curr_loop->getAofFilePath(), curr_loop->getAofFileOffset());
-    // }
-
-    // if(Config::getInstance().rdb_enabled_) {
-    //     this->rdbLoader_->load_from_rdb(curr_loop->getRdbFilePath());
-    // }
+    throw std::logic_error("recovery is not implemented; standalone memory mode only");
 }
-
-};
+}

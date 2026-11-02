@@ -1,10 +1,12 @@
 #pragma once
 
+#include "Allocator.h"
+
 #include <cstddef>
 
 namespace rkv {
 
-class JemallocWrapper;
+
 
 enum RedisType {
     OBJ_STRING = 0,

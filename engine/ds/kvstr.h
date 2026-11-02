@@ -1,10 +1,12 @@
 #pragma once
 
+#include "Allocator.h"
+
 namespace rkv {
 
 constexpr int EMBSTR_MAX_LEN = 44;
 
-class JemallocWrapper;
+
 
 struct RedisObject;
 

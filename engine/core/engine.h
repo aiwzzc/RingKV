@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Allocator.h"
+
 #include <optional>
 #include <string>
 
@@ -10,7 +12,7 @@
 
 namespace rkv {
 
-class JemallocWrapper;
+
 struct kvstr;
 using EngineMap = ankerl::unordered_dense::map<kvstr*, RedisObject*, KvstrHash, KvstrEqual>;
 
@@ -19,8 +21,6 @@ protected:
     JemallocWrapper* mempool_;
 
 public:
-    friend class KvsProtocolHandler;
-
     Ringengine(JemallocWrapper* pool) : mempool_(pool) {}
     virtual ~Ringengine() = default;
 

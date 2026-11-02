@@ -3,7 +3,7 @@
 #pragma push_macro("free")
 #undef free
 
-namespace rkv {
+namespace AeroIO::base {
 
 void* JemallocWrapper::alloc(std::size_t size) {
     void* ptr = ::je_malloc(size);

@@ -1,6 +1,5 @@
 #include "TcpConnection.h"
 #include "EventLoop.h"
-#include "TcpServer.h"
 
 #include <assert.h>
 #include <liburing.h>
@@ -34,10 +33,9 @@ namespace net {
 
 TcpConnection::TcpConnection(EventLoop* loop, int socket, PoolContext& ctx) : 
     loop_(loop), 
-    state_(StateE::kConnecting), connState_(ConnState::NORMAL_CLIENT),
+    state_(StateE::kConnecting),
     socket_(std::make_unique<Socket>(socket)),
-    Poolctx_(std::move(ctx)), is_replica_(false), need_reply_(true),
-    is_writing_(false) {
+    Poolctx_(ctx), is_writing_(false) {
 
     // socket_->setKeepAlive(true);
 }
@@ -50,9 +48,6 @@ UringBuffer* TcpConnection::getInputBuffer()
 
 int TcpConnection::fd() const
 { return this->socket_->fd(); }
-
-ConnState TcpConnection::getConnState()
-{ return this->connState_; }
 
 void TcpConnection::setMessageCallback(const MessageCallback& cb)
 { this->messageCallback_ = cb; }
@@ -83,9 +78,6 @@ EventLoop* TcpConnection::getLoop() const
 
 void TcpConnection::setContext(const std::any& context)
 { this->context_ = context; }
-
-void TcpConnection::setConnState(ConnState state)
-{ this->connState_ = state; }
 
 const std::any& TcpConnection::getContext() const
 { return this->context_; }
@@ -261,8 +253,6 @@ void TcpConnection::start() {
     this->read_req_ = std::make_unique<IoRequest>(shared_from_this());
     read_req_->setType(IoType::RECV);
 
-    this->close_req_ = std::make_unique<CloseRequest>(shared_from_this());
-    close_req_->setType(IoType::CLOSE);
 
     io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
 
@@ -337,47 +327,7 @@ void TcpConnection::handleRead(int res_bytes) {
     io_uring_sqe_set_data(sqe, req);
 }
 
-#if 0
-void TcpConnection::handleRead(int res_bytes) {
-    if(res_bytes > 0) {
-        this->inputBuffer_.hasWritten(res_bytes);
 
-        if(this->messageCallback_) {
-            this->messageCallback_(shared_from_this(), &this->inputBuffer_);
-        }
-
-    } else if(res_bytes == 0 || (res_bytes < 0 && res_bytes != -EAGAIN)) {
-        onPostClosereq();
-        return;
-    }
-
-    if(this->loop_ == nullptr) return;
-
-    if(this->inputBuffer_.writableBytes() < UringBuffer::kMinWritableBytes) {
-        this->inputBuffer_.EnsureFreeSpace(UringBuffer::kMinWritableBytes);
-    }
-
-    io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-    if(!sqe) {
-        io_uring_submit(this->loop_->ring());
-
-        sqe = io_uring_get_sqe(this->loop_->ring());
-    }
-
-    IoRequest* req = this->read_req_.get();
-    req->setConn(shared_from_this());
-
-    int index = this->getFixedIndex();
-    if(index < 0 || this->loop_->getFixedFds()[index] < 0) {
-        this->forceClose();
-        return;
-    }
-
-    io_uring_prep_recv(sqe, index, (void*)this->inputBuffer_.beginWrite(), this->inputBuffer_.writableBytes(), 0);
-    sqe->flags |= IOSQE_FIXED_FILE;
-    io_uring_sqe_set_data(sqe, req);
-}
-#endif
 
 void TcpConnection::handleClose() {
     if (disconnected() || read_in_flight_ || write_in_flight_) return;
@@ -437,171 +387,6 @@ void TcpConnection::connectDestroyed() {
     }
 }
 
-void TcpConnection::handleWrite() {
-    if(this->writeCompleteCallback_) {
-        this->writeCompleteCallback_(shared_from_this());
-    }
-
-    if(this->backlog_.empty()) {
-        if(this->state_ == StateE::kDisconnecting) {
-            this->state_ = StateE::kDisconnected;
-
-            if(int index = getFixedIndex()) {
-                int remove_fd = -1;
-                io_uring_register_files_update(this->loop_->ring(), index, &remove_fd, 1);
-
-                this->loop_->queueInfreeFixedFds(index);
-                this->loop_->getFixedFds()[index] = -1;
-                setNoregister();
-            }
-
-            ::shutdown(fd(), SHUT_WR);
-        }
-
-    } else {
-        flush_backlog();
-    }
-}
-
-void TcpConnection::detachFromLoop() {
-    this->loop_ = nullptr;
-    // this->read_req_.reset();
-    // this->close_req_.reset();
-    if(this->current_reply_) {
-        // this->replyBufPool_->release(this->current_reply_);
-        this->current_reply_.reset();
-    }
-}
-
-void TcpConnection::attachToLoop(EventLoop* newLoop) {
-    this->loop_ = newLoop;
-
-    this->read_req_ = std::make_unique<IoRequest>(shared_from_this());
-    read_req_->setType(IoType::RECV);
-    this->close_req_ = std::make_unique<CloseRequest>(shared_from_this());
-    close_req_->setType(IoType::CLOSE);
-
-    TcpServer* newTcpServer = newLoop->getTcpServer();
-    // this->Serverctx_ = newTcpServer->getServerContext();
-
-    // this->
-
-    int index = newLoop->getFreeFixedFd();
-
-    if(index < 0) {
-        index = newLoop->getNextIndex();
-        if(index < 0) {
-            // LOG_ERROR MAXCONNLIMIT
-            return;
-        }
-    }
-
-    int connfd = this->fd();
-    newLoop->getFixedFds()[index] = connfd;
-    
-    io_uring_register_files_update(newLoop->ring(), index, &connfd, 1);
-
-    this->setFixedFileIndex(index);
-
-    this->setMessageCallback(newTcpServer->messageCallback_);
-    this->setConnectionCallback(newTcpServer->connectionCallback_);
-    this->setWriteCompleteCallback(newTcpServer->writeCompleteCallback_);
-    this->setCloseCallback([newLoop, newTcpServer, this] (const TcpConnectionPtr& conn) {
-        newLoop->runInLoop([newTcpServer, conn = shared_from_this()] () {
-            newTcpServer->removeConnection(conn->fd());
-            conn->connectDestroyed();
-        });
-    });
-
-    newLoop->getTcpServer()->addConnections(connfd, shared_from_this());
-
-    newLoop->runInLoop([conn = shared_from_this()] () {
-        conn->start();
-    });
-}
-
-void TcpConnection::send(const char* data, std::size_t len) {
-    if(!this->connected()) return;
-
-    this->appendToPendingWrite(data, len);
-
-    io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
-
-    int index = this->getFixedIndex();
-    
-    if(!sqe || index < 0 || this->loop_->getFixedFds()[index] < 0) {
-        this->writing_reply_.reset(); 
-        this->forceClose();
-        return;
-    }
-
-    write_in_flight_ = true;
-    io_uring_prep_writev(sqe, index, this->send_pending_->iovs_, this->send_pending_->iov_cnt_, 0);
-    sqe->flags |= IOSQE_FIXED_FILE;
-    io_uring_sqe_set_data(sqe, this->send_pending_.get());
-}
-
-void TcpConnection::send() {
-    if(!this->connected()) return;
-
-    io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
-
-    int index = this->getFixedIndex();
-    
-    if(!sqe || index < 0 || this->loop_->getFixedFds()[index] < 0) {
-        this->writing_reply_.reset(); 
-        this->forceClose();
-        return;
-    }
-
-    write_in_flight_ = true;
-    io_uring_prep_writev(sqe, index, &this->send_pending_->iovs_[this->send_pending_->iov_start_idx_],
-    this->send_pending_->iov_cnt_ - this->send_pending_->iov_start_idx_, 0);
-    sqe->flags |= IOSQE_FIXED_FILE;
-    io_uring_sqe_set_data(sqe, this->send_pending_.get());
-}
-
-void TcpConnection::appendToPendingWrite(const char* data, std::size_t len) {
-    this->send_pending_->append(data, len);
-}
-
-void TcpConnection::setIsReplica(bool yes)
-{ this->is_replica_ = yes; }
-
-bool TcpConnection::IsReplica()
-{ return this->is_replica_; }
-
-void TcpConnection::setNeedReply(bool yes)
-{ this->need_reply_ = yes; }
-
-bool TcpConnection::NeedReply()
-{ return this->need_reply_; }
-
-std::size_t TcpConnection::getReplicaOffset() const
-{ return this->replica_offset_; }
-
-void TcpConnection::addReplOffset(std::size_t offset)
-{ this->replica_offset_ += offset; }
-
-void TcpConnection::shutdown() {
-    if(this->state_ == StateE::kConnected) {
-        this->state_ = StateE::kDisconnecting;
-
-        if(this->backlog_.empty()) {
-            if(int index = getFixedIndex()) {
-                int remove_fd = -1;
-                io_uring_register_files_update(this->loop_->ring(), index, &remove_fd, 1);
-
-                this->loop_->queueInfreeFixedFds(index);
-                this->loop_->getFixedFds()[index] = -1;
-                setNoregister();
-            }
-
-            ::shutdown(fd(), SHUT_WR);
-        }
-    }
-}
-
 void TcpConnection::forceClose() {
     if (disconnected()) return;
     state_ = StateE::kDisconnecting;
@@ -610,185 +395,16 @@ void TcpConnection::forceClose() {
     handleClose();
 }
 
-void TcpConnection::flush_backlog() {
-    if(this->backlog_.empty()) return;
-
-    io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-    if(!sqe) {
-        io_uring_submit(this->loop_->ring());
-        sqe = io_uring_get_sqe(this->loop_->ring());
-    }
-
-    this->writing_reply_ = this->backlog_.front();
-    this->backlog_.pop_front();
-
-    int index = this->getFixedIndex();
-
-    if(index < 0 || this->loop_->getFixedFds()[index] < 0) {
-        this->forceClose();
+void TcpConnection::send(std::string data) {
+    if (!loop_->isInLoopThread()) {
+        loop_->runInLoop([self = shared_from_this(), data = std::move(data)]() mutable {
+            self->send(std::move(data));
+        });
         return;
     }
-
-    write_in_flight_ = true;
-    io_uring_prep_writev(sqe, index, this->writing_reply_->iovs_, this->writing_reply_->iov_cnt_, 0);
-    sqe->flags |= IOSQE_FIXED_FILE;
-    io_uring_sqe_set_data(sqe, this->writing_reply_.get());
-
-    this->is_writing_ = true;
+    if (!connected()) return;
+    if (tryFillReplyBuffer(data)) flushWriteBatch();
 }
 
-#if 0
-void TcpConnection::send(const void* message, int len) {
-    return send(std::string_view(static_cast<const char*>(message), len));
 }
-
-void TcpConnection::send(std::string_view message) {
-    if(this->state_ == StateE::kConnected) {
-        if(this->loop_->isInLoopThread()) {
-            PendingWrite* pw = this->pwPool_->get();
-            pw->head_.type_ = IoType::SEND;
-            pw->data_size_ = message.size();
-
-            if(message.size() < PENDINGWRITEDATASIZE) {
-                ::memcpy(pw->stack_data_, message.data(), message.size());
-                pw->in_heap_ = false;
-
-            } else {
-                pw->heap_data_ = std::make_shared<std::string>(message);
-                pw->in_heap_ = true;
-            }
-
-            pw->in_used_ = true;
-            pw->conn_ = shared_from_this();
-
-            send_schedul(pw);
-
-        } else {
-            std::string msg_copy{message};
-
-            this->loop_->runInLoop([this, msg = std::move(msg_copy)] () {
-                PendingWrite* pw = this->pwPool_->get();
-                pw->head_.type_ = IoType::SEND;
-                pw->data_size_ = msg.size();
-
-                if(msg.size() < PENDINGWRITEDATASIZE) {
-                    ::memcpy(pw->stack_data_, msg.data(), msg.size());
-                    pw->in_heap_ = false;
-
-                } else {
-                    pw->heap_data_ = std::make_shared<std::string>(msg);
-                    pw->in_heap_ = true;
-                }
-
-                pw->in_used_ = true;
-                pw->conn_ = shared_from_this();
-
-                send_schedul(pw);
-            });
-        }
-    }
 }
-
-void TcpConnection::send(UringBuffer* message) {
-    if(this->state_ == StateE::kConnected) {
-        if(this->loop_->isInLoopThread()) {
-            PendingWrite* pw = this->pwPool_->get();
-            pw->head_.type_ = IoType::SEND;
-            pw->data_size_ = message->readableBytes();
-
-            if(message->readableBytes() < PENDINGWRITEDATASIZE) {
-                ::memcpy(pw->stack_data_, message->peek(), message->readableBytes());
-                pw->in_heap_ = false;
-                message->retrieveAll();
-
-            } else {
-                pw->zero_copy_buffer_ = message->takeBuffer();
-                pw->in_heap_ = true;
-            }
-
-            pw->in_used_ = true;
-            pw->conn_ = shared_from_this();
-
-            send_schedul(pw);
-        }
-    }
-}
-
-void TcpConnection::send_schedul(PendingWrite* pw) {
-    if(this->loop_->ring() == nullptr) return;
-
-    if((pw->in_heap_ && !pw->heap_data_) || 
-        (!pw->in_heap_ && !pw->stack_data_) || !pw->conn_) {
-        this->pwPool_->release(pw);
-        return;
-    }
-
-    if(!pw->conn_->connected()) {
-        this->pwPool_->release(pw);
-        return;
-    }
-
-    std::size_t remain = pw->data_size_ - pw->offset_;
-
-    if(remain > 0) {
-        io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-        if(!sqe) {
-            this->backlog_.push_back(pw);
-            io_uring_submit(this->loop_->ring());
-
-            return;
-        }
-
-        const char* msg = nullptr;
-        if(pw->in_heap_) {
-            msg = pw->heap_data_->data() + pw->offset_;
-
-        } else {
-            msg = pw->stack_data_ + pw->offset_;
-        }
-
-        io_uring_prep_send(sqe, pw->conn_->fd(), (const void*)msg, remain, MSG_NOSIGNAL);
-        io_uring_sqe_set_data(sqe, pw);
-
-    } else {
-        handleWrite();
-        this->pwPool_->release(pw);
-    }
-}
-
-void TcpConnection::flush_backlog() {
-    if(this->backlog_.empty()) return;
-
-    while(!this->backlog_.empty()) {
-        io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-        if(!sqe) break;
-
-        PendingWrite* pw = this->backlog_.front();
-        this->backlog_.pop_front();
-
-        if((pw->in_heap_ && !pw->heap_data_) || 
-            (!pw->in_heap_ && !pw->stack_data_) || !pw->conn_) {
-            this->pwPool_->release(pw);
-            return;
-        }
-
-        std::size_t remain = pw->data_size_ - pw->offset_;
-        const char* msg = nullptr;
-        if(pw->in_heap_) {
-            msg = pw->heap_data_->data() + pw->offset_;
-
-        } else {
-            msg = pw->stack_data_ + pw->offset_;
-        }
-
-        io_uring_prep_send(sqe, pw->conn_->fd(), (const void*)msg, remain, MSG_NOSIGNAL);
-        io_uring_sqe_set_data(sqe, pw);
-
-    }
-}
-
-#endif
-
-};
-
-};

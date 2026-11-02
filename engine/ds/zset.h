@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Allocator.h"
+
 #include <set>
 #include <vector>
 #include "dict.h"
@@ -7,7 +9,7 @@
 
 namespace rkv {
 
-class JemallocWrapper;
+
 
 class ZSetObject {
 

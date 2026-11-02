@@ -4,6 +4,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(JEMALLOC jemalloc)
 
 add_library(aeroIo_base ${Base_SRC})
+target_include_directories(aeroIo_base PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(aeroIo_base
 PUBLIC
