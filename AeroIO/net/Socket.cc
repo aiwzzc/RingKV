@@ -1,9 +1,9 @@
 #include "Socket.h"
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <iostream>
-#include <thread>
 #include <cstring>
+#include <unistd.h>
+#include <system_error>
 
 namespace AeroIO {
 
@@ -12,7 +12,11 @@ namespace net {
 Socket::Socket(int sockfd) : sockfd_(sockfd), 
 fixed_file_index_(-1), is_register_(false) {};
 
-Socket::~Socket() = default;
+Socket::~Socket() { close(); }
+
+void Socket::close() noexcept {
+    if (sockfd_ >= 0) { ::close(sockfd_); sockfd_ = -1; }
+}
 
 int Socket::fd() const
 { return this->sockfd_; }
@@ -30,9 +34,7 @@ void Socket::setNoregister()
 
 int Socket::setNoblockingSocket() {
     int sockfd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
-    if (sockfd < 0) {
-        // LOG_SYSFATAL << "sockets::createNonblockingOrDie";
-    }
+    if (sockfd < 0) throw std::system_error(errno, std::generic_category(), "socket");
 
     return sockfd;
 }
@@ -58,8 +60,8 @@ void Socket::setReuseAddr(bool on) {
 
 void Socket::setReusePort(bool on) {
     int optval = on ? 1 : 0;
-    ::setsockopt(sockfd_, SOL_SOCKET, SO_REUSEPORT,
-                &optval, static_cast<socklen_t>(sizeof optval));
+    if (::setsockopt(sockfd_, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof optval) < 0)
+        throw std::system_error(errno, std::generic_category(), "SO_REUSEPORT");
 }
 
 void Socket::setKeepAlive(bool on) {
@@ -70,20 +72,12 @@ void Socket::setKeepAlive(bool on) {
 
 void Socket::bindAddress(int sockfd, const struct sockaddr* addr) {
     int ret = ::bind(sockfd, addr, static_cast<socklen_t>(sizeof(struct sockaddr_in)));
-    if(ret < 0) {
-        if (ret < 0) {
-            std::cerr << "[FATAL] Thread " << std::this_thread::get_id() 
-                    << " bind failed! errno: " << errno << " (" << strerror(errno) << ")" << std::endl;
-            exit(EXIT_FAILURE); // 一旦绑定失败，直接让整个进程崩溃，不要让它变成僵尸死锁！
-        }
-    }
+    if (ret < 0) throw std::system_error(errno, std::generic_category(), "bind");
 }
 
 void Socket::listen(int sockfd) {
     int ret = ::listen(sockfd, SOMAXCONN);
-    if(ret < 0) {
-        // LOG_ERROR
-    }
+    if (ret < 0) throw std::system_error(errno, std::generic_category(), "listen");
 }
 
 };

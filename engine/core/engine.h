@@ -24,6 +24,13 @@ public:
     Ringengine(JemallocWrapper* pool) : mempool_(pool) {}
     virtual ~Ringengine() = default;
 
+    rhash_sec<std::string, uint64_t>& expires() { return expires_; }
+
+private:
+    rhash_sec<std::string, uint64_t> expires_;
+
+public:
+
     virtual JemallocWrapper* mempool() = 0;
 
     virtual EngineMap& getUnderlyingMap() = 0;
@@ -84,7 +91,7 @@ private:
 
 public:
     explicit rdict(JemallocWrapper* pool);
-    ~rdict() = default;
+    ~rdict() override;
 
     EngineMap& getUnderlyingMap() override;
 

@@ -1,6 +1,8 @@
 # RingKV
 一款基于 Shared-nothing 架构与 io_uring 网络设施的高性能多线程KV存储引擎
 
+当前正在进行架构重构。第一轮已整理配置和启动/退出流程，阅读入口见 [第一轮设计说明](docs/phase1-lifecycle.md)。当前可运行模式为单机内存模式，未完成的 AOF、RDB、复制配置会明确拒绝启动。
+
 ## Features
 - 基于io_uring的高性能网络
 - Shared-nothing 多线程架构
@@ -19,11 +21,13 @@ Benchmark tool: `redis-benchmark`
 
 ### Requirements
 
-- Linux 5.15+
-- CMake 3.16+
+- Linux 6.1+，运行环境允许 io_uring
+- CMake 3.20+
 - GCC 13+
-- liburing
+- liburing 2.3+
 - jemalloc
+- hiredis
+- Python 3（仅运行测试需要，可用 `-DBUILD_TESTING=OFF` 关闭测试构建）
 
 ### Compile
 
@@ -31,9 +35,8 @@ Benchmark tool: `redis-benchmark`
 git clone https://github.com/aiwzzc/RingKV.git
 cd RingKV
 
-mkdir build && cd build
-
-cmake .. && make
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
 ```
 
 ---
@@ -41,8 +44,13 @@ cmake .. && make
 ## Run
 
 ```bash
-./bin/RingKV
+./build/bin/RingKV --config config/server.conf --check-config
+./build/bin/RingKV --config config/server.conf
 ```
+
+支持 `--ip`、`--port`、`--threads` 覆盖配置，以及 `--dump-config` 查看最终值。不指定配置文件时使用默认值（`127.0.0.1:5005`，1 个 worker）。使用 Ctrl+C 或 SIGTERM 停止服务；当前停止会取消连接 I/O，不保证所有在途回复送达。
+
+运行本轮回归检查：`ctest --test-dir build --output-on-failure`。
 
 ---
 

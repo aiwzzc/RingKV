@@ -16,6 +16,7 @@ AsyncWorker::AsyncWorker() {
 
 AsyncWorker::~AsyncWorker() {
     this->stop();
+    if (auto* array = spsc_array_.exchange(nullptr)) array->release();
 }
 
 #if 0
@@ -27,23 +28,15 @@ void AsyncWorker::appendMpscBuffers(LogEntry&& entry) {
 #endif
 
 void AsyncWorker::start() {
+    running_.store(true, std::memory_order_release);
     this->backend_thread_ = std::thread([this] () {
         this->backendThreadFunc();
     });
 }
 
 void AsyncWorker::stop() {
-    SpscRingBufferArrayPtr spsc_array = this->spsc_array_.load(std::memory_order_acquire);
-    if(spsc_array) spsc_array->release();
-
-    if(this->running_) {
-        this->running_ = false;
-        // this->notifyBackend();
-
-        if(this->backend_thread_.joinable()) {
-            this->backend_thread_.join();
-        }
-    }
+    running_.store(false, std::memory_order_release);
+    if (backend_thread_.joinable()) backend_thread_.join();
 }
 
 void AsyncWorker::addSink(LogSinkPtr LogSink) {
@@ -87,7 +80,7 @@ void AsyncWorker::backendThreadFunc() {
     std::size_t remain = KBatchBufferSize;
     std::size_t round_robin_idx{0};
 
-    while(this->running_) {
+    while (true) {
 #if 0
         int current = this->pending_counts_.load(std::memory_order_acquire);
         if(current == 0) {
@@ -134,11 +127,16 @@ void AsyncWorker::backendThreadFunc() {
         std::optional<LogEntry> buffer_opt;
         int processed{0};
 
-        SpscRingBufferArrayPtr spsc_array = this->spsc_array_.load(std::memory_order_acquire);
-        spsc_array->acquire();
+        SpscRingBufferArrayPtr spsc_array;
+        {
+            std::lock_guard lock(this->register_mutex_);
+            spsc_array = spsc_array_.load(std::memory_order_acquire);
+            spsc_array->acquire();
+        }
 
         if(spsc_array->count_ == 0) {
             spsc_array->release();
+            if (!running_.load(std::memory_order_acquire)) break;
             std::this_thread::sleep_for(std::chrono::microseconds(100));
             continue;
         }
@@ -189,6 +187,7 @@ void AsyncWorker::backendThreadFunc() {
             }
 
         } else {
+            if (!running_.load(std::memory_order_acquire)) break;
             std::this_thread::yield();
         }
     }

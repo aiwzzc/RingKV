@@ -31,7 +31,10 @@ public:
 
     TcpServer(rkv::JemallocWrapper*, int, AcceptorOption option = AcceptorOption::kReusePort);
 
+    ~TcpServer();
+    void prepare(const std::string& ip);
     void start();
+    void quiesce() noexcept;
     EventLoop* getLoop();
     void setLoopsEngines(LoopsEngines LoopsEngines);
     LoopsEngines getLoopsEngines();
@@ -53,7 +56,7 @@ private:
     BlockPool blockPool_;
 
     std::string name_;
-    LoopsEngines LoopsEngines_;
+    LoopsEngines LoopsEngines_ = nullptr;
 
     MessageCallback messageCallback_;
     ConnectionCallback connectionCallback_;

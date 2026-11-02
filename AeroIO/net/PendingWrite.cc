@@ -163,7 +163,8 @@ void PendingWritePool::reset(PendingWrite* pw) {
 // ========== ReplyBuffer ==========
 
 ReplyBuffer::ReplyBuffer(rkv::JemallocWrapper* mempool) : 
-mempool_(mempool) {
+head_{IoType::SEND}, in_used_(false), iov_cnt_(0), total_bytes_(0),
+iov_start_idx_(0), mempool_(mempool) {
     // this->string_holders_.reserve(MAX_IOV_COUNT);
 }
 
@@ -263,8 +264,9 @@ void ReplyBuffer::adjustForPartialWrite(int written_bytes) {
 
 void ReplyBuffer::onComplete(int res_bytes) {
 
-    if(this->conn_ && this->head_.type_ == IoType::SEND) {
-        this->conn_->send_schedul(res_bytes);
+    auto conn = this->conn_;
+    if(conn && this->head_.type_ == IoType::SEND) {
+        conn->send_schedul(res_bytes);
     }
 }
 
@@ -276,6 +278,7 @@ ReplyBufferPool::~ReplyBufferPool() {
         ReplyBuffer* reply = container_of(this->free_list_.next_, ReplyBuffer, node_);
         list_del(this->free_list_.next_);
 
+        reply->~ReplyBuffer();
         this->mempool_->free(reply);
     }
 }

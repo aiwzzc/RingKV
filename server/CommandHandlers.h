@@ -131,10 +131,8 @@ class CommandHandlers {
 
 private:
     static bool timeout_delete(std::string_view key, Ringengine* engine);
-    static void timeout_delete(std::string_view key);
-    static bool timeout_exist(std::string_view key);
-    static bool timeout_delete_expire(std::string_view key);
-    static void timeout_exist_delete(std::string_view key);
+    static bool timeout_delete_expire(std::string_view key, Ringengine* engine);
+    static void timeout_exist_delete(std::string_view key, Ringengine* engine);
 
 public:
     static void commandCommand(CommandContext& ctx);

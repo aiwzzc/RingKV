@@ -4,6 +4,7 @@
 #include "PendingWrite.h"
 
 #include "Log/LogApi.h"
+#include <system_error>
 
 namespace AeroIO {
 
@@ -30,13 +31,20 @@ TcpConnectionPtr TcpServer::addNewConnection(int sockfd) {
         index = this->loop_.getNextIndex();
         if(index < 0) {
             LOG_ERROR("MAXCONNLIMIT");
+            conn->stopAfterIoCancelled();
             return nullptr;
         }
     }
 
     this->loop_.getFixedFds()[index] = sockfd;
     
-    io_uring_register_files_update(this->loop_.ring(), index, &sockfd, 1);
+    int registered = io_uring_register_files_update(this->loop_.ring(), index, &sockfd, 1);
+    if (registered < 0) {
+        loop_.getFixedFds()[index] = -1;
+        loop_.queueInfreeFixedFds(index);
+        conn->stopAfterIoCancelled();
+        throw std::system_error(-registered, std::generic_category(), "register connection fd");
+    }
 
     conn->setFixedFileIndex(index);
 
@@ -86,11 +94,24 @@ void TcpServer::setConnectionCallback(const ConnectionCallback& cb)
 void TcpServer::setWriteCompleteCallback(const WriteCompleteCallback& cb)
 { this->writeCompleteCallback_ = cb; }
 
+TcpServer::~TcpServer() { quiesce(); }
+
+void TcpServer::prepare(const std::string& ip) {
+    loop_.setTcpServer(this);
+    loop_.setLoopsEngines(LoopsEngines_);
+    acceptor_.prepare(ip);
+    loop_.prepare();
+}
+
 void TcpServer::start() {
-    this->loop_.setTcpServer(this);
-    this->loop_.setLoopsEngines(this->LoopsEngines_);
-    this->acceptor_.start();
-    this->loop_.loop();
+    acceptor_.start();
+    loop_.loop();
+}
+
+void TcpServer::quiesce() noexcept {
+    loop_.quiesceIo();
+    for (auto& [fd, conn] : connections_) conn->stopAfterIoCancelled();
+    connections_.clear();
 }
 
 EventLoop* TcpServer::getLoop()

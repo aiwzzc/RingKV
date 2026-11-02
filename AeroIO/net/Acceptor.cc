@@ -1,31 +1,39 @@
 #include "Acceptor.h"
 #include "EventLoop.h"
 
-#include <string.h>
+#include <stdexcept>
 
 namespace AeroIO {
 
 namespace net {
 
-Acceptor::Acceptor(EventLoop* loop, int port, bool ReUsePort) : 
-    loop_(loop), acceptSocket_(Socket::setNoblockingSocket()) {
+Acceptor::Acceptor(EventLoop* loop, int port, bool reusePort) :
+    loop_(loop), acceptSocket_(Socket::setNoblockingSocket()), port_(port) {
+    acceptSocket_.setReusePort(reusePort);
+}
 
-    sockaddr_in server_addr;
-    ::memset(&server_addr, 0, sizeof(sockaddr_in));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+void Acceptor::prepare(const std::string& ip) {
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port_);
+    if (::inet_pton(AF_INET, ip.c_str(), &address.sin_addr) != 1) {
+        throw std::invalid_argument("invalid IPv4 listen address");
+    }
 
-    this->acceptSocket_.setReusePort(true);
+    acceptSocket_.bindAddress(acceptSocket_.fd(), reinterpret_cast<sockaddr*>(&address));
+    acceptSocket_.listen(acceptSocket_.fd());
 
-    this->acceptSocket_.bindAddress(this->acceptSocket_.fd(), (sockaddr*)&server_addr);
-    this->acceptSocket_.listen(this->acceptSocket_.fd());
+    auto addr = std::make_unique<sockaddr_in>();
+    accept_req_ = new IoReqeustAcceptor(this, reinterpret_cast<sockaddr*>(addr.release()));
+    accept_req_->head_.type_ = IoType::ACCEPT;
+    accept_req_->addrlen_ = sizeof(sockaddr_in);
 }
 
 Acceptor::~Acceptor() {
-    ::close(this->acceptSocket_.fd());
-    delete this->accept_req_->addr_;
-    delete this->accept_req_;
+    if (accept_req_) {
+        delete reinterpret_cast<sockaddr_in*>(accept_req_->addr_);
+        delete accept_req_;
+    }
 }
 
 void Acceptor::setNewConnectionCallback(const NewConnectionCallback& cb)
@@ -38,12 +46,7 @@ void Acceptor::start() {
         sqe = io_uring_get_sqe(this->loop_->ring());
     }
 
-    sockaddr_in* addr = new sockaddr_in;
-    this->accept_req_ = new IoReqeustAcceptor(this, (sockaddr*)addr);
-    this->accept_req_->head_.type_ = IoType::ACCEPT;
-    this->accept_req_->addrlen_ = sizeof(sockaddr_in);
-
-    io_uring_prep_accept(sqe, this->acceptSocket_.fd(), (sockaddr*)addr, &this->accept_req_->addrlen_, 0);
+    io_uring_prep_accept(sqe, this->acceptSocket_.fd(), this->accept_req_->addr_, &this->accept_req_->addrlen_, 0);
     io_uring_sqe_set_data(sqe, this->accept_req_);
 
 }
@@ -52,7 +55,7 @@ int Acceptor::acceptorfd() const
 { return this->acceptSocket_.fd(); }
 
 void Acceptor::handleRead(int res_bytes) {
-    if(res_bytes > 0) {
+    if(res_bytes >= 0) {
         if(this->newConnectionCallback_) {
             this->newConnectionCallback_(res_bytes);
         }

@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.20)
 project(RingKV)
 
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+find_package(Threads REQUIRED)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -15,6 +18,11 @@ add_subdirectory(engine)
 add_subdirectory(server)
 add_subdirectory(protocol)
 add_subdirectory(src)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 option(ENABLE_PROFILING "Enable -pg for profiling with gprof/uftrace" OFF)
 

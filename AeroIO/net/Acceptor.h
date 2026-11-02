@@ -5,6 +5,7 @@
 #include "IoRequest.h"
 
 #include <liburing.h>
+#include <string>
 
 namespace AeroIO {
 
@@ -19,6 +20,7 @@ public:
     Acceptor(EventLoop* loop, int port, bool ReUsePort);
     ~Acceptor();
 
+    void prepare(const std::string& ip);
     void start();
 
     void setNewConnectionCallback(const NewConnectionCallback&);
@@ -30,7 +32,8 @@ private:
 
     EventLoop* loop_;
     Socket acceptSocket_;
-    IoReqeustAcceptor* accept_req_;
+    IoReqeustAcceptor* accept_req_ = nullptr;
+    int port_;
 
     NewConnectionCallback newConnectionCallback_;
 };

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <thread>
 #include <vector>
 
 #include "net/TcpServer.h"
@@ -9,10 +8,11 @@
 #include "protocolhandler.h"
 #include "config.h"
 #include "ServerContext.h"
+#include "RouteBatchTask.h"
+#include "WorkerGroup.h"
 
 #include "core/engine.h"
 #include "base/jemalloc.h"
-#include "persist/loader.h"
 #include "ds/dict.h"
 
 using AeroIO::net::TcpServer;
@@ -31,53 +31,46 @@ class EventLoop;
 
 namespace rkv {
 
-constexpr std::size_t REPLYBUFFERPOOLSIZE = 4096;
-
-class kvserver {
+class kvserver : public Worker {
 
 public:
-    using ExpireMap = rhash_sec<std::string, uint64_t>;
-    static ExpireMap expires_;
-
-    friend class RingKVServer;
-
-    kvserver(Config& config);
-
-    void start();
+    using Topology = std::vector<std::pair<AeroIO::net::EventLoop*, Ringengine*>>;
+    kvserver(const Config& config, std::size_t index, Topology& topology);
+    void prepare() override;
+    void run() override;
+    void requestStop() noexcept override;
+    void quiesce() noexcept override;
+    bool drain() override;
     void onMessage(const AeroIO::net::TcpConnectionPtr& conn, AeroIO::net::Buffers& buf);
     AeroIO::net::EventLoop* getLoop();
     Ringengine* getEngine();
-    Config* getConfig() const;
 
 private:
-    Config config_;
+    const Config config_;
     JemallocWrapper mempool_{};
+    RouteBatchTaskPool task_pool_;
     rdict engine_;
     KvsProtocolHandler protocol_;
     ServerContext context_;
     TcpServer Tcpserver_;
-    LoaderManager LoaderManager_{nullptr, nullptr};
-
-    bool is_Shaking_;
+    std::size_t index_;
+    Topology& topology_;
 
 };
 
 class RingKVServer {
-
 public:
-    RingKVServer(Config& config);
-    ~RingKVServer();
-
+    explicit RingKVServer(Config config);
     void start();
+    void requestStop() noexcept { workers_.requestStop(); }
+    void stop() noexcept { workers_.stop(); }
+    bool waitForStop(std::chrono::milliseconds timeout) { return workers_.waitForStop(timeout); }
+    void rethrowError() const { workers_.rethrowError(); }
 
 private:
-    std::vector<std::pair<AeroIO::net::EventLoop*, Ringengine*>> LoopsEngines_;
-    std::vector<std::thread> workers_;
-    // std::unique_ptr<HttpServer> httpServer_;
-    
-    std::size_t shard_thread_count_{1};
-    Config config_;
-
+    const Config config_;
+    kvserver::Topology topology_;
+    // Last member: workers are stopped before topology/configuration disappear.
+    WorkerGroup workers_;
 };
-
-};
+}

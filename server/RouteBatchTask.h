@@ -20,7 +20,7 @@ using execute_cmd = void(*)(rkv::CommandContext&, const rkv::CommandDef*);
 
 struct RouteBatchTask : std::enable_shared_from_this<RouteBatchTask> {
 
-    struct AeroIO::net::list_head node_;
+
 
     RoutedCommand cmds[64];
     int cmd_count_{0};
@@ -43,19 +43,17 @@ constexpr std::size_t TASKPOOLSIZE = 512;
 class RouteBatchTaskPool {
 
 private:
-    struct AeroIO::net::list_head head_;
-    std::size_t pool_size_;
-    rkv::JemallocWrapper* mempool_;
+    std::vector<RouteBatchTask*> free_;
+    rkv::JemallocWrapper& mempool_;
 
 public:
-    RouteBatchTaskPool();
+    explicit RouteBatchTaskPool(rkv::JemallocWrapper& mempool);
+    RouteBatchTaskPool(const RouteBatchTaskPool&) = delete;
+    RouteBatchTaskPool& operator=(const RouteBatchTaskPool&) = delete;
     ~RouteBatchTaskPool();
 
-    static RouteBatchTaskPool& getInstance();
     RouteBatchTaskPtr get(AeroIO::net::EventLoop* current_loop);
     void release(RouteBatchTask* task);
-    void initPool();
-    void setMempool(rkv::JemallocWrapper* mempool);
 
 };
 

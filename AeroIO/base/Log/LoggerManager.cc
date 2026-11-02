@@ -39,7 +39,7 @@ void LoggerManager::addSink(LogSinkPtr sink) {
 }
 
 void LoggerManager::stop() {
-    Instance().worker_->stop();
+    if (Instance().worker_) Instance().worker_->stop();
     Instance().loggers_.clear();
 }
 

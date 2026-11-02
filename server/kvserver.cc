@@ -5,34 +5,28 @@
 #include "net/TcpConnection.h"
 #include "persist/loader.h"
 
-#include <latch>
 
 namespace rkv {
 
-kvserver::ExpireMap kvserver::expires_{};
+kvserver::kvserver(const Config& config, std::size_t index, Topology& topology) :
+    config_(config), task_pool_(mempool_), engine_(&mempool_),
+    protocol_(&engine_, task_pool_), context_(&mempool_, &engine_),
+    Tcpserver_(&mempool_, config.port_), index_(index), topology_(topology) {}
 
-kvserver::kvserver(Config& config) : 
-    config_(config),
-    engine_(&this->mempool_),
-    protocol_(&this->engine_),
-    context_(&this->mempool_, &this->engine_),
-    Tcpserver_(&this->mempool_, config.port_) {
-
-        KvsProtocolHandler::config_ = config;
-
-        RouteBatchTaskPool& taskPool = RouteBatchTaskPool::getInstance();
-        taskPool.setMempool(&this->mempool_);
-        taskPool.initPool();
-}
-
-void kvserver::start() {
-
-    this->Tcpserver_.setMessageCallback([this] (const AeroIO::net::TcpConnectionPtr& conn, AeroIO::net::Buffers& buf) {
-        onMessage(conn, buf);
+void kvserver::prepare() {
+    topology_[index_] = {getLoop(), getEngine()};
+    Tcpserver_.setLoopsEngines(&topology_);
+    getLoop()->setPersistFileIndex(static_cast<int>(index_));
+    Tcpserver_.setMessageCallback([this](const auto& connection, auto& buffers) {
+        onMessage(connection, buffers);
     });
-
-    this->Tcpserver_.start();
+    Tcpserver_.prepare(config_.ip_);
 }
+
+void kvserver::run() { Tcpserver_.start(); }
+void kvserver::requestStop() noexcept { getLoop()->quit(); }
+void kvserver::quiesce() noexcept { Tcpserver_.quiesce(); }
+bool kvserver::drain() { return getLoop()->drainTasks(); }
 
 void kvserver::onMessage(const AeroIO::net::TcpConnectionPtr& conn, AeroIO::net::Buffers& blocks) {
 
@@ -105,43 +99,14 @@ AeroIO::net::EventLoop* kvserver::getLoop()
 Ringengine* kvserver::getEngine()
 { return &this->engine_; }
 
-RingKVServer::RingKVServer(Config& config) : config_(config) {};
-
-RingKVServer::~RingKVServer() {
-    for(auto& t : this->workers_) {
-        if(t.joinable()) t.join();
-    }
+RingKVServer::RingKVServer(Config config) : config_(std::move(config)) {
+    config_.validate();
+    topology_.resize(config_.shard_threads_);
 }
 
 void RingKVServer::start() {
-
-    this->shard_thread_count_ = this->config_.shard_threads_ >= 1 ? this->config_.shard_threads_ : 1;
-
-    auto init_latch = std::make_shared<std::latch>(this->shard_thread_count_ + 1);
-
-    this->LoopsEngines_.resize(this->shard_thread_count_);
-
-    for(int i = 0; i < this->shard_thread_count_; ++i) {
-        this->workers_.emplace_back([this, i, init_latch] () {
-            kvserver server{this->config_};
-
-            this->LoopsEngines_[i] = std::make_pair<AeroIO::net::EventLoop*, Ringengine*>(
-                server.getLoop(), 
-                server.getEngine()
-            );
-
-            init_latch->arrive_and_wait();
-            server.Tcpserver_.setLoopsEngines(&this->LoopsEngines_);
-            server.Tcpserver_.getLoop()->setPersistFileIndex(i);
-            server.LoaderManager_ = LoaderManager{server.getEngine(), &this->LoopsEngines_};
-            server.LoaderManager_.start();
-
-            server.start();
-    
-        });
-    }
-
-    init_latch->arrive_and_wait();
+    workers_.start(config_.shard_threads_, [this](std::size_t index) {
+        return std::make_unique<kvserver>(config_, index, topology_);
+    });
 }
-
-};
+}

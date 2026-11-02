@@ -1,6 +1,5 @@
 #include "TcpConnection.h"
 #include "EventLoop.h"
-#include "Log/LogApi.h"
 #include "TcpServer.h"
 
 #include <assert.h>
@@ -35,7 +34,7 @@ namespace net {
 
 TcpConnection::TcpConnection(EventLoop* loop, int socket, PoolContext& ctx) : 
     loop_(loop), 
-    state_(StateE::kConnecting), 
+    state_(StateE::kConnecting), connState_(ConnState::NORMAL_CLIENT),
     socket_(std::make_unique<Socket>(socket)),
     Poolctx_(std::move(ctx)), is_replica_(false), need_reply_(true),
     is_writing_(false) {
@@ -115,7 +114,6 @@ ReplyBufferPtr TcpConnection::getCurrentReplyBuffer() {
 
 bool TcpConnection::tryFillReplyBuffer(std::string& msg) {
     if (this->disconnected()) {
-        LOG_FATAL("conn disconnect");
         return false;
     }
 
@@ -192,18 +190,23 @@ void TcpConnection::send_start() {
         return;
     }
 
+    write_in_flight_ = true;
     io_uring_prep_writev(sqe, index, this->writing_reply_->iovs_, this->writing_reply_->iov_cnt_, 0);
     sqe->flags |= IOSQE_FIXED_FILE;
     io_uring_sqe_set_data(sqe, this->writing_reply_.get());
 }
 
 void TcpConnection::send_schedul(int res_bytes) {
+    write_in_flight_ = false;
+    if (!connected()) { handleClose(); return; }
+
     if(res_bytes <= 0) {
         if(res_bytes == -EAGAIN || res_bytes == -EWOULDBLOCK) {
             io_uring_sqe* sqe = get_sqe_safe(this->loop_->ring());
 
             int index = this->getFixedIndex();
             if(index >= 0 && this->loop_->getFixedFds()[index] >= 0) {
+                write_in_flight_ = true;
                 io_uring_prep_writev(sqe, index, 
                     &this->writing_reply_->iovs_[this->writing_reply_->iov_start_idx_], 
                     this->writing_reply_->iov_cnt_ - this->writing_reply_->iov_start_idx_, 0);
@@ -225,6 +228,7 @@ void TcpConnection::send_schedul(int res_bytes) {
 
     if(res_bytes == this->writing_reply_->total_bytes_) {
         this->writing_reply_.reset();
+        this->is_writing_ = false;
 
         if(!this->backlog_.empty() || (this->current_reply_ && this->current_reply_->total_bytes_ > 0)) {
             this->send_start();
@@ -245,6 +249,7 @@ void TcpConnection::send_schedul(int res_bytes) {
             return;
         }
 
+        write_in_flight_ = true;
         io_uring_prep_writev(sqe, index, &this->writing_reply_->iovs_[this->writing_reply_->iov_start_idx_], 
         this->writing_reply_->iov_cnt_ - this->writing_reply_->iov_start_idx_, 0);
         sqe->flags |= IOSQE_FIXED_FILE;
@@ -274,6 +279,7 @@ void TcpConnection::start() {
     this->active_recv_block_ = this->Poolctx_.blockPool->get();
     this->recv_blocks_.push_back(this->active_recv_block_);
 
+    read_in_flight_ = true;
     io_uring_prep_recv(sqe, index, (void*)this->active_recv_block_->beginWrite(), 
     this->active_recv_block_->writableBytes(), 0);
     sqe->flags |= IOSQE_FIXED_FILE;
@@ -281,6 +287,9 @@ void TcpConnection::start() {
 }
 
 void TcpConnection::handleRead(int res_bytes) {
+    read_in_flight_ = false;
+    if (!connected()) { handleClose(); return; }
+
     if(res_bytes > 0) {
         this->active_recv_block_->hasWritten(res_bytes);
 
@@ -321,6 +330,7 @@ void TcpConnection::handleRead(int res_bytes) {
         return;
     }
 
+    read_in_flight_ = true;
     io_uring_prep_recv(sqe, index, (void*)this->active_recv_block_->beginWrite(), 
     this->active_recv_block_->writableBytes(), 0);
     sqe->flags |= IOSQE_FIXED_FILE;
@@ -370,42 +380,41 @@ void TcpConnection::handleRead(int res_bytes) {
 #endif
 
 void TcpConnection::handleClose() {
-    if(this->state_ == StateE::kDisconnected) return;
-
-    TcpConnectionPtr guardThis(shared_from_this());
-
-    if(this->closeCallback_) {
-        this->closeCallback_(guardThis);
-    }
-
-    if(this->current_reply_) {
-        // this->replyBufPool_->release(this->current_reply_);
-        this->current_reply_.reset();
-    }
-
-    if(int index = getFixedIndex()) {
-        int remove_fd = -1;
-        io_uring_register_files_update(this->loop_->ring(), index, &remove_fd, 1);
-
-        this->loop_->queueInfreeFixedFds(index);
-        this->loop_->getFixedFds()[index] = -1;
+    if (disconnected() || read_in_flight_ || write_in_flight_) return;
+    auto keep_alive = shared_from_this();
+    const int index = getFixedIndex();
+    if (index >= 0) {
+        int empty = -1;
+        io_uring_register_files_update(loop_->ring(), index, &empty, 1);
+        loop_->queueInfreeFixedFds(index);
+        loop_->getFixedFds()[index] = -1;
         setNoregister();
     }
-
-    this->state_ = StateE::kDisconnected;
+    state_ = StateE::kDisconnected;
+    // The callback removes the connection using its original fd.
+    if (closeCallback_) closeCallback_(keep_alive);
+    socket_->close();
+    context_.reset();
+    backlog_.clear();
+    current_reply_.reset();
+    writing_reply_.reset();
+    recv_blocks_.clear();
+    active_recv_block_.reset();
 }
 
-void TcpConnection::onPostClosereq() {
-    if(this->state_ == StateE::kDisconnected) return;
+void TcpConnection::onPostClosereq() { forceClose(); }
 
-    io_uring_sqe* sqe = io_uring_get_sqe(this->loop_->ring());
-    if(!sqe) {
-        io_uring_submit(this->loop_->ring());
-        sqe = io_uring_get_sqe(this->loop_->ring());
-    }
-
-    io_uring_prep_close(sqe, this->fd());
-    io_uring_sqe_set_data(sqe, this->close_req_.get());
+void TcpConnection::stopAfterIoCancelled() {
+    state_ = StateE::kDisconnected;
+    read_in_flight_ = false;
+    write_in_flight_ = false;
+    socket_->close();
+    context_.reset();
+    backlog_.clear();
+    current_reply_.reset();
+    writing_reply_.reset();
+    recv_blocks_.clear();
+    active_recv_block_.reset();
 }
 
 void TcpConnection::handleError() {
@@ -526,6 +535,7 @@ void TcpConnection::send(const char* data, std::size_t len) {
         return;
     }
 
+    write_in_flight_ = true;
     io_uring_prep_writev(sqe, index, this->send_pending_->iovs_, this->send_pending_->iov_cnt_, 0);
     sqe->flags |= IOSQE_FIXED_FILE;
     io_uring_sqe_set_data(sqe, this->send_pending_.get());
@@ -544,6 +554,7 @@ void TcpConnection::send() {
         return;
     }
 
+    write_in_flight_ = true;
     io_uring_prep_writev(sqe, index, &this->send_pending_->iovs_[this->send_pending_->iov_start_idx_],
     this->send_pending_->iov_cnt_ - this->send_pending_->iov_start_idx_, 0);
     sqe->flags |= IOSQE_FIXED_FILE;
@@ -592,27 +603,11 @@ void TcpConnection::shutdown() {
 }
 
 void TcpConnection::forceClose() {
-    if(this->state_ == StateE::kConnected || this->state_ == StateE::kDisconnecting) {
-        this->state_ = StateE::kDisconnecting;
-
-        for(auto reply : this->backlog_) {
-            // this->replyBufPool_->release(reply);
-            reply.reset();
-        }
-
-        this->backlog_.clear();
-
-        if(int index = getFixedIndex()) {
-            int remove_fd = -1;
-            io_uring_register_files_update(this->loop_->ring(), index, &remove_fd, 1);
-
-            this->loop_->queueInfreeFixedFds(index);
-            this->loop_->getFixedFds()[index] = -1;
-            setNoregister();
-        }
-
-        ::shutdown(fd(), SHUT_RDWR);
-    }
+    if (disconnected()) return;
+    state_ = StateE::kDisconnecting;
+    // Keep request/buffer ownership until both completions have arrived.
+    ::shutdown(fd(), SHUT_RDWR);
+    handleClose();
 }
 
 void TcpConnection::flush_backlog() {
@@ -634,6 +629,7 @@ void TcpConnection::flush_backlog() {
         return;
     }
 
+    write_in_flight_ = true;
     io_uring_prep_writev(sqe, index, this->writing_reply_->iovs_, this->writing_reply_->iov_cnt_, 0);
     sqe->flags |= IOSQE_FIXED_FILE;
     io_uring_sqe_set_data(sqe, this->writing_reply_.get());

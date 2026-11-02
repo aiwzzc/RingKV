@@ -11,6 +11,9 @@ class Socket {
 public:
     Socket(int sockfd);
     ~Socket();
+    Socket(const Socket&) = delete;
+    Socket& operator=(const Socket&) = delete;
+    void close() noexcept;
 
     int fd() const;
     int getFixedIndex() const;

@@ -89,6 +89,8 @@ public:
     void handleError();
 
     void forceClose();
+    // Only after the loop has synchronously cancelled all I/O.
+    void stopAfterIoCancelled();
     void shutdown();
     void detachFromLoop();
     void attachToLoop(EventLoop* newLoop);
@@ -132,6 +134,8 @@ private:
     bool is_replica_{false};
     bool need_reply_{true};
     bool is_writing_{false};
+    bool read_in_flight_{false};
+    bool write_in_flight_{false};
     std::size_t replica_offset_{0};
 
     MessageCallback messageCallback_;

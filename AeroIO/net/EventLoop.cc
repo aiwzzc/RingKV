@@ -14,8 +14,8 @@
 #include <sys/eventfd.h>
 #include <cstring>
 #include <cstdio>
-#include <stdio.h>
 #include <immintrin.h>
+#include <system_error>
 
 namespace {
 
@@ -37,64 +37,82 @@ static thread_local EventLoop* t_loopInThisThread = nullptr;
 EventLoop* EventLoop::getEventLoopOfCurrentThread()
 { return t_loopInThisThread; }
 
-EventLoop::EventLoop() : 
-    wakeupfd_(createEventfd()), 
+EventLoop::EventLoop() :
     pending_functors_(std::make_unique<moodycamel::ConcurrentQueue<Functor>>()),
-    fixed_fds_index_(3), aof_is_flushing_(false), aof_fsync_in_flight_(false), 
-    aof_is_rewriting_(false), aof_file_offset_(0), temp_aof_file_offset_(0), 
+    fixed_fds_index_(3), aof_is_flushing_(false), aof_fsync_in_flight_(false),
+    aof_is_rewriting_(false), aof_file_offset_(0), temp_aof_file_offset_(0),
     aof_fsync_error_count_(0), aof_rewrite_bucket_cursor_(0), rdb_is_saving_(false),
     rdb_cow_bucket_cursor_(0), repl_is_writing_(false) {
-
-    this->fixed_fds_.resize(FIXEDFDSIZE, -1);
-
-    this->threadId_ = std::this_thread::get_id();
-    t_loopInThisThread = this;
-
-    io_uring_params params;
-    memset(&params, 0, sizeof(io_uring_params));
-
-    // // 开启 SQPOLL，内核线程自动拉取，实现零系统调用
-    // params.flags |= IORING_SETUP_SQPOLL;
-    // params.sq_thread_idle = 2000; // 空闲2秒后内核线程休眠
-
-    // 魔法 1：告诉内核，这个 Ring 只有一个线程在操作。
-    // 内核会直接干掉 io_uring 内部的各种互斥锁和自旋锁！(需 Linux 6.0+)
-    params.flags |= IORING_SETUP_SINGLE_ISSUER; 
-
-    // 魔法 2：协同式 Task Work。
-    // 告诉内核：不要发中断打断我！我会配合你在 io_uring_enter 的时候自己处理回调。 (需 Linux 5.19+)
-    params.flags |= IORING_SETUP_COOP_TASKRUN;  
-
-    // 魔法 3：延迟 Task Work。
-    // 强制所有的完成事件，只有当线程主动调用 wait() 时才处理，彻底回归类似 epoll 的无中断轮询模式！ (需 Linux 6.1+)
-    params.flags |= IORING_SETUP_DEFER_TASKRUN; 
-
-    params.cq_entries = kEntresLength * 2;
-    this->ring_ = new io_uring;
-    int ret = io_uring_queue_init_params(kEntresLength, this->ring_, &params);
-
-    if (ret < 0) {
-        delete this->ring_;
-        this->ring_ = nullptr;
-        
-        char err_buf[256];
-        snprintf(err_buf, sizeof(err_buf), "io_uring_queue_init_params failed: %s (ret=%d)", strerror(-ret), ret);
-        
-        // LOG_FATAL << err_buf;
-        printf("io_uring init ret = %d, err = %s\n", ret, strerror(-ret));
-        abort();
+    fixed_fds_.resize(FIXEDFDSIZE, -1);
+    threadId_ = std::this_thread::get_id();
+    auto ring = std::make_unique<io_uring>();
+    io_uring_params params{};
+    params.flags = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN |
+                   IORING_SETUP_DEFER_TASKRUN;
+    int result = io_uring_queue_init_params(kEntresLength, ring.get(), &params);
+    if (result < 0)
+        throw std::system_error(-result, std::generic_category(),
+                               "io_uring setup (Linux 6.1+ with io_uring enabled required)");
+    try {
+        wakeupfd_ = createEventfd();
+        result = io_uring_register_files(ring.get(), fixed_fds_.data(), fixed_fds_.size());
+        if (result < 0) throw std::system_error(-result, std::generic_category(), "register files");
+        result = io_uring_register_files_update(ring.get(), 0, &wakeupfd_, 1);
+        if (result < 0) throw std::system_error(-result, std::generic_category(), "register wakeup fd");
+        fixed_fds_[0] = wakeupfd_;
+        io_uring_sync_cancel_reg cancel{};
+        cancel.flags = IORING_ASYNC_CANCEL_ANY | IORING_ASYNC_CANCEL_ALL;
+        cancel.timeout.tv_sec = -1;
+        cancel.timeout.tv_nsec = -1;
+        result = io_uring_register_sync_cancel(ring.get(), &cancel);
+        if (result < 0 && result != -ENOENT)
+            throw std::system_error(-result, std::generic_category(), "synchronous io_uring cancellation required");
+    } catch (...) {
+        io_uring_queue_exit(ring.get());
+        if (wakeupfd_ >= 0) ::close(wakeupfd_);
+        throw;
     }
-
-    io_uring_register_files(this->ring_, this->fixed_fds_.data(), this->fixed_fds_.size());
-    io_uring_register_files_update(this->ring_, 0, &this->wakeupfd_, 1);
-    this->fixed_fds_[0] = this->wakeupfd_;
+    ring_ = ring.release();
+    t_loopInThisThread = this;
 }
 
 EventLoop::~EventLoop() {
-    ::close(this->wakeupfd_);
-    io_uring_queue_exit(this->ring_);
-    delete this->ring_;
+    quiesceIo();
+    io_uring_queue_exit(ring_);
+    delete ring_;
+    ::close(wakeupfd_);
+    t_loopInThisThread = nullptr;
 }
+
+void EventLoop::quiesceIo() noexcept {
+    if (quiesced_) return;
+    // The caller keeps connections, operation contexts and buffers alive here.
+    int result;
+    while (io_uring_sq_ready(ring_) != 0) {
+        do { result = io_uring_submit(ring_); } while (result == -EINTR);
+        if (result <= 0) std::terminate();
+    }
+    io_uring_sync_cancel_reg cancel{};
+    cancel.flags = IORING_ASYNC_CANCEL_ANY | IORING_ASYNC_CANCEL_ALL;
+    cancel.timeout.tv_sec = -1;
+    cancel.timeout.tv_nsec = -1;
+    do { result = io_uring_register_sync_cancel(ring_, &cancel); } while (result == -EINTR);
+    // An unexpected kernel failure cannot justify freeing in-use buffers.
+    if (result < 0 && result != -ENOENT) std::terminate();
+    io_uring_cqe* completion;
+    while (io_uring_peek_cqe(ring_, &completion) == 0) {
+        auto data = io_uring_cqe_get_data64(completion);
+        if (data != WAKEUP_MSG_DATA && data != SENDER_IGNORE_MSG && data != 0) {
+            auto* head = static_cast<GeneralHead*>(io_uring_cqe_get_data(completion));
+            // A successful accept owns an fd even when its callback is discarded.
+            if (head->type_ == IoType::ACCEPT && completion->res >= 0) ::close(completion->res);
+        }
+        io_uring_cqe_seen(ring_, completion);
+    }
+    quiesced_ = true;
+}
+
+bool EventLoop::drainTasks() { return doPendingFunctors(); }
 
 io_uring* EventLoop::ring()
 { return this->ring_; }
@@ -187,7 +205,7 @@ void EventLoop::runInLoop(Functor cb) {
 int EventLoop::createEventfd() {
     int evtfd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (evtfd < 0) {
-        abort();
+        throw std::system_error(errno, std::generic_category(), "eventfd");
     }
     return evtfd;
 }
@@ -195,9 +213,8 @@ int EventLoop::createEventfd() {
 void EventLoop::wakeup() {
     uint64_t one = 1;
     ssize_t n = ::write(this->wakeupfd_, &one, sizeof one);
-    if(n != sizeof one) {
-        LOG_FATAL("Wakeup failed! errno: {}", errno);
-    }
+    if (n < 0 && errno == EINTR) wakeup();
+    // EAGAIN means eventfd is already readable; no additional wakeup is needed.
 }
 
 void EventLoop::setPersistFileIndex(int index) { 
@@ -708,8 +725,7 @@ void EventLoop::start_Active_Expire() {
 ReplBacklog* EventLoop::replBacklog()
 { return &this->repl_backlog_; }
 
-void EventLoop::loop() {
-    // LOG_INFO("loop begin");
+void EventLoop::prepare() {
 
     this->armWakeupFd();
 
@@ -718,11 +734,10 @@ void EventLoop::loop() {
     initRdb();
     start_Active_Expire();
 
-    // if(rkv::Config::getInstance().cluster_enabled_ && !rkv::Config::getInstance().is_master_) {
-    //     startHandshake();
-    // }
+}
 
-    while(!this->quit_) {
+void EventLoop::loop() {
+    while (!quit_.load(std::memory_order_acquire)) {
 
 #if 0
         int ret = io_uring_submit_and_wait(this->ring_, 1);
@@ -746,12 +761,15 @@ void EventLoop::loop() {
 #endif
 
         io_uring_cqe* cqe;
-        unsigned head;
         unsigned count{0};
 
-        io_uring_for_each_cqe(this->ring_, head, cqe){
-
-            uint64_t user_data = io_uring_cqe_get_data64(cqe);
+        while (io_uring_peek_cqe(ring_, &cqe) == 0) {
+            const int result = cqe->res;
+            const uint64_t user_data = io_uring_cqe_get_data64(cqe);
+            auto* req_head = static_cast<GeneralHead*>(io_uring_cqe_get_data(cqe));
+            // Consume before invoking user code: if a callback throws, shutdown
+            // must not inspect an already-released operation a second time.
+            io_uring_cqe_seen(ring_, cqe);
 
             if(user_data == WAKEUP_MSG_DATA) {
                 this->armWakeupFd();
@@ -760,18 +778,17 @@ void EventLoop::loop() {
                 continue;
             }
 
-            GeneralHead* req_head = static_cast<GeneralHead*>(io_uring_cqe_get_data(cqe));
             if(req_head->type_== IoType::RECV) {
                 IoRequest* recvreq = reinterpret_cast<IoRequest*>(req_head);
-                recvreq->onComplete(cqe->res);
+                recvreq->onComplete(result);
 
             } else if(req_head->type_ == IoType::SEND) {
                 ReplyBuffer* replybuf = reinterpret_cast<ReplyBuffer*>(req_head);
-                replybuf->onComplete(cqe->res);
+                replybuf->onComplete(result);
 
             } else if(req_head->type_ == IoType::ACCEPT) {
                 IoReqeustAcceptor* acceptorreq = reinterpret_cast<IoReqeustAcceptor*>(req_head);
-                acceptorreq->onComplete(cqe->res);
+                acceptorreq->onComplete(result);
 
             } else if(req_head->type_ == IoType::CLOSE) {
                 CloseRequest* closereq = reinterpret_cast<CloseRequest*>(req_head);
@@ -779,35 +796,35 @@ void EventLoop::loop() {
 
             } else if(req_head->type_ == IoType::AOF_WRITE) {
                 AofRequest* aofreq = reinterpret_cast<AofRequest*>(req_head);
-                aofreq->onComplete(cqe->res);
+                aofreq->onComplete(result);
 
             } else if(req_head->type_ == IoType::AOF_FSYNC) {
                 AoffsyncRequest* aoffsyncreq = reinterpret_cast<AoffsyncRequest*>(req_head);
-                aoffsyncreq->onComplete(cqe->res);
+                aoffsyncreq->onComplete(result);
 
             } else if(req_head->type_ == IoType::TIMER) {
                 TimerRequest* timerreq = reinterpret_cast<TimerRequest*>(req_head);
-                timerreq->onComplete(cqe->res);
+                timerreq->onComplete(result);
 
             } else if(req_head->type_ == IoType::AOF_REWRITE) {
                 AofRewriteRequest* aofrewritereq = reinterpret_cast<AofRewriteRequest*>(req_head);
-                aofrewritereq->onComplete(cqe->res);
+                aofrewritereq->onComplete(result);
 
             } else if(req_head->type_ == IoType::AOF_REWRITE) {
                 RdbWriteRequest* rdbwritereq = reinterpret_cast<RdbWriteRequest*>(req_head);
-                rdbwritereq->onComplete(cqe->res);
+                rdbwritereq->onComplete(result);
 
             } else if(req_head->type_ == IoType::HANDSHAKE) {
                 HandShakeRequest* handshakereq = reinterpret_cast<HandShakeRequest*>(req_head);
-                handshakereq->onComplete(cqe->res);
+                handshakereq->onComplete(result);
 
             } else if(req_head->type_ == IoType::REPL_SEND) {
                 SendReplicaRequest* sendReplReq = reinterpret_cast<SendReplicaRequest*>(req_head);
-                sendReplReq->onComplete(cqe->res);
+                sendReplReq->onComplete(result);
 
             } else if(req_head->type_ == IoType::HTTP_SEND) {
                 PendingWrite* pw = reinterpret_cast<PendingWrite*>(req_head);
-                pw->onComplete(cqe->res);
+                pw->onComplete(result);
 
             } else {
                 LOG_FATAL("CRITICAL: Unknown CQE type");
@@ -816,10 +833,10 @@ void EventLoop::loop() {
             ++count;
         };
 
-        if(count > 0) io_uring_cq_advance(this->ring_, count);
 
         bool did_task = doPendingFunctors();
         tryFlushAof();
+        if (quit_.load(std::memory_order_acquire)) break;
 #if 1
         if(count == 0 && !did_task) {
             this->is_sleeping_.store(true, std::memory_order_seq_cst);
@@ -829,7 +846,9 @@ void EventLoop::loop() {
                 io_uring_submit(this->ring_);
 
             } else {
-                io_uring_submit_and_wait(this->ring_, 1);
+                int result = io_uring_submit_and_wait(this->ring_, 1);
+                if (result < 0 && result != -EINTR)
+                    throw std::system_error(-result, std::generic_category(), "io_uring wait");
                 this->is_sleeping_.store(false, std::memory_order_seq_cst);
             }
 
@@ -841,7 +860,7 @@ void EventLoop::loop() {
 }
 
 void EventLoop::quit() {
-    this->quit_ = true;
+    if (quit_.exchange(true, std::memory_order_acq_rel)) return;
 
     if(!isInLoopThread()) {
         wakeup();

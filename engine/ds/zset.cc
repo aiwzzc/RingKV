@@ -28,10 +28,10 @@ void ZSetObject::release_all_node(JemallocWrapper* mempool) {
 
     this->dict_.flushall();
     for(auto it = this->tree_.begin(); it != this->tree_.end();) {
-        mempool->free((*it)->member_);
-        mempool->free(*it);
-
+        auto* node = *it;
         it = this->tree_.erase(it);
+        // member_ is embedded in the same allocation as ZNode.
+        mempool->free(node);
     }
 }
 

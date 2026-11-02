@@ -79,7 +79,7 @@ private:
     std::atomic<int> pending_counts_{0};
 #endif
     std::thread backend_thread_;
-    bool running_{true};
+    std::atomic<bool> running_{false};
 
     std::atomic<SpscRingBufferArrayPtr> spsc_array_{nullptr};
     std::mutex register_mutex_;

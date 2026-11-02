@@ -115,10 +115,8 @@ using AeroIO::net::EventLoop;
 
 namespace rkv {
 
-Config KvsProtocolHandler::config_{};
-
-KvsProtocolHandler::KvsProtocolHandler(Ringengine* engine) : 
-engine_(engine) {}
+KvsProtocolHandler::KvsProtocolHandler(Ringengine* engine, RouteBatchTaskPool& task_pool) :
+engine_(engine), task_pool_(task_pool) {}
 
 std::string KvsProtocolHandler::dumpObjectToResp(const std::string_view& key, RedisObject* obj) {
     switch(obj->type) {
@@ -221,31 +219,9 @@ void KvsProtocolHandler::executeCommandAndPersist(CommandContext& ctx, const Com
 #endif
     def->handle_(ctx);
     
-    if(def->is_write_ && ctx.success_) {
-        std::string intact_cmd = to_resp_string(ctx.tokens_);
+    // Persistence/replication options are rejected by Config::validate() until
+    // their lifecycle is implemented. No process-global configuration here.
 
-        if(ctx.is_runInloop_) {
-
-            if(config_.cluster_enabled_ && config_.is_master_) {
-                ctx.curr_loop_->appendReplicationBacklog(intact_cmd);
-            }
-
-            if(config_.aof_enabled_) {
-                ctx.target_loop_->appendAof(intact_cmd.data(), intact_cmd.size());
-            }
-
-
-        } else {
-
-            if(config_.cluster_enabled_ && config_.is_master_) {
-                ctx.curr_loop_->appendReplicationBacklog(intact_cmd);
-            }
-
-            if(config_.aof_enabled_) {
-                ctx.curr_loop_->appendAof(intact_cmd.data(), intact_cmd.size());
-            }
-        }
-    }
 }
 
 void KvsProtocolHandler::dispatch_command(
@@ -542,7 +518,7 @@ END_PARSE:
 
         EventLoop* target_loop = (*LoopsEngines)[i].first;
 
-        RouteBatchTaskPtr task = RouteBatchTaskPool::getInstance().get(curr_loop);
+        RouteBatchTaskPtr task = task_pool_.get(curr_loop);
         task->clinet_ = client;
         task->current_loop_ = curr_loop;
         task->target_engine_ = target_engine;

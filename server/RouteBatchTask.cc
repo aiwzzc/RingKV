@@ -8,9 +8,10 @@ using namespace AeroIO::net;
 namespace rkv {
 
 void RouteBatchTask::reset() {
-    for(int i = 0; i < this->cmd_count_; ++i) {
-        this->cmds[i].buffer_ = std::string("");
-        this->cmds[i].tokens_.clear();
+    for (int i = 0; i < cmd_count_; ++i) {
+        cmds[i].tokens_.clear();
+        cmds[i].buffer_ = std::string{};
+        cmds[i].response_data_.clear();
     }
 
     this->cmd_count_ = 0;
@@ -71,62 +72,38 @@ void RouteBatchTask::operator()() {
     });
 }
 
-RouteBatchTaskPool::RouteBatchTaskPool() { INIT_LIST_HEAD(&this->head_); }
+RouteBatchTaskPool::RouteBatchTaskPool(rkv::JemallocWrapper& mempool) : mempool_(mempool) { free_.reserve(TASKPOOLSIZE); }
+
 RouteBatchTaskPool::~RouteBatchTaskPool() {
-    while(this->head_.next_ != &this->head_) {
-        RouteBatchTask* task = container_of(this->head_.next_, RouteBatchTask, node_);
-        list_del(this->head_.next_);
-
-        this->mempool_->free(task);
+    for (auto* task : free_) {
+        task->~RouteBatchTask();
+        mempool_.free(task);
     }
 }
 
-void RouteBatchTaskPool::initPool() {
-    for(int i = 0; i < TASKPOOLSIZE; ++i) {
-        void*p = this->mempool_->alloc(sizeof(RouteBatchTask));
-        if(p == nullptr) return;
-
-        RouteBatchTask* task = new (p) RouteBatchTask();
-        list_add(&this->head_, &task->node_);
+RouteBatchTaskPtr RouteBatchTaskPool::get(EventLoop* owner) {
+    RouteBatchTask* task;
+    if (free_.empty()) {
+        void* storage = mempool_.alloc(sizeof(RouteBatchTask));
+        if (!storage) throw std::bad_alloc();
+        try { task = new (storage) RouteBatchTask(); }
+        catch (...) { mempool_.free(storage); throw; }
+    } else {
+        task = free_.back();
+        free_.pop_back();
     }
-}
-
-RouteBatchTaskPool& RouteBatchTaskPool::getInstance() {
-    static thread_local RouteBatchTaskPool instance;
-    return instance;
-}
-
-RouteBatchTaskPtr RouteBatchTaskPool::get(EventLoop* current_loop) {
-    RouteBatchTask* task = nullptr;
-    if(this->head_.next_ == &this->head_) {
-        void*p = this->mempool_->alloc(sizeof(RouteBatchTask));
-        if(p == nullptr) return nullptr;
-
-        task = new (p) RouteBatchTask();
-
-        return std::shared_ptr<RouteBatchTask>(task, [current_loop] (RouteBatchTask* Task) {
-            current_loop->runInLoop([Task] () {
-                RouteBatchTaskPool::getInstance().release(Task);
-            });
-        });
-    }
-
-    task = container_of(this->head_.next_, RouteBatchTask, node_);
-    list_del(this->head_.next_);
-
-    return std::shared_ptr<RouteBatchTask>(task, [current_loop] (RouteBatchTask* Task) {
-        current_loop->runInLoop([Task] () {
-            RouteBatchTaskPool::getInstance().release(Task);
-        });
+    return RouteBatchTaskPtr(task, [this, owner](RouteBatchTask* returned) {
+        owner->runInLoop([this, returned] { release(returned); });
     });
 }
 
 void RouteBatchTaskPool::release(RouteBatchTask* task) {
     task->reset();
-    list_add(&this->head_, &task->node_);
+    // Pool capacity is an optimization, not an allocation requirement at shutdown.
+    if (free_.size() < free_.capacity()) free_.push_back(task);
+    else {
+        task->~RouteBatchTask();
+        mempool_.free(task);
+    }
 }
-
-void RouteBatchTaskPool::setMempool(rkv::JemallocWrapper* mempool)
-{ this->mempool_ = mempool; }
-
-};
+}

@@ -8,7 +8,6 @@
 #include <unordered_map>
 
 #include "ringClient.h"
-#include "config.h"
 
 namespace AeroIO {
 namespace net {
@@ -30,6 +29,7 @@ using TcpConnectionPtr = std::shared_ptr<TcpConnection>;
 namespace rkv {
 
 class Ringengine;
+class RouteBatchTaskPool;
 struct RedisObject;
 struct CommandContext;
 struct CommandDef;
@@ -51,7 +51,7 @@ private:
     Ringengine* engine_;
 
 public:
-    static Config config_;
+    RouteBatchTaskPool& task_pool_;
 
 private:
     int dispatch(const AeroIO::net::TcpConnectionPtr&, std::vector<std::string_view>&, AeroIO::net::ReplyBuffer*);
@@ -63,7 +63,7 @@ private:
         std::unordered_map<std::string_view, std::string>&, std::unordered_map<std::string_view, delay_write>&);
 
 public:
-    explicit KvsProtocolHandler(Ringengine* engine);
+    explicit KvsProtocolHandler(Ringengine* engine, RouteBatchTaskPool& task_pool);
 
     int handleProto(const AeroIO::net::TcpConnectionPtr&, AeroIO::net::Buffers&);
     // static void handleTargetProto();

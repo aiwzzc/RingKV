@@ -20,15 +20,30 @@ rdict::rdict(JemallocWrapper* pool) : Ringengine(pool) {
     // this->dict_.getUnderlyingMap().reserve(6000000);
 }
 
+rdict::~rdict() { flushall(); }
+
 EngineMap& rdict::getUnderlyingMap()
 { return this->dict_.getUnderlyingMap(); }
 
 int rdict::del(std::string_view key) {
-    return this->dict_.hash_del(key);
+    auto& map = dict_.getUnderlyingMap();
+    auto it = map.find(key);
+    if (it == map.end()) return 0;
+    auto* stored_key = it->first;
+    auto* object = it->second;
+    map.erase(it);
+    robject::freeRedisObject(object, mempool_);
+    mempool_->free(stored_key);
+    return 1;
 }
 
 void rdict::flushall() {
+    for (auto& [key, object] : dict_.getUnderlyingMap()) {
+        robject::freeRedisObject(object, mempool_);
+        mempool_->free(key);
+    }
     this->dict_.flushall();
+    expires().getUnderlyingMap().clear();
 }
 
 RedisObject* rdict::getMeta(std::string_view key) {

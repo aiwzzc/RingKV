@@ -26,6 +26,7 @@ void robject::freeRedisObject(RedisObject* obj, JemallocWrapper* mempool) {
             if(obj->ptr) {
                 ListObject* list = (ListObject*)obj->ptr;
                 list->release_all_node(mempool);
+                list->~ListObject();
 
                 mempool->free(obj->ptr);
             }
@@ -38,6 +39,7 @@ void robject::freeRedisObject(RedisObject* obj, JemallocWrapper* mempool) {
             if(obj->ptr) {
                 ZSetObject* zset = (ZSetObject*)obj->ptr;
                 zset->release_all_node(mempool);
+                zset->~ZSetObject();
 
                 mempool->free(obj->ptr);
             }

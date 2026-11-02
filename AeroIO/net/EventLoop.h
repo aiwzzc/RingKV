@@ -72,7 +72,10 @@ public:
     void runInLoop(Functor cb);
     void setTcpServer(TcpServer* server);
     TcpServer* getTcpServer();
+    void prepare();
     void loop();
+    void quiesceIo() noexcept;
+    bool drainTasks();
     void quit();
     io_uring* ring();
     void addTimer(uint64_t ms, const TimerCallback& cb, TimerRequest* timer);
@@ -132,11 +135,12 @@ private:
     void start_Active_Expire();
     void do_Active_Expire();
 
-    io_uring* ring_;
-    rkv::Ringengine* engine_;
-    bool quit_;
+    io_uring* ring_ = nullptr;
+    rkv::Ringengine* engine_ = nullptr;
+    std::atomic<bool> quit_{false};
+    bool quiesced_ = false;
     std::thread::id threadId_;
-    int wakeupfd_;
+    int wakeupfd_ = -1;
     uint64_t wakeup_buf_;
     TcpServer* TcpServer_;
 
@@ -183,7 +187,7 @@ private:
     std::unique_ptr<RdbWriteRequest> rdbWrite_req_;
     std::unique_ptr<HandShakeRequest> handShake_req_;
     std::unique_ptr<SendReplicaRequest> sendRepl_req_;
-    int connect_index_;
+    int connect_index_ = 0;
     std::string handShake_instruction_;
 
     std::vector<std::pair<TcpConnectionPtr, std::unique_ptr<SendReplicaRequest>>> replicas_;

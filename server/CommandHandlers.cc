@@ -1,5 +1,4 @@
 #include "CommandHandlers.h"
-#include "kvserver.h"
 
 #include "core/engine.h"
 #include "respresstr.h"
@@ -182,43 +181,32 @@ void CommandHandlers::pingCommand(CommandContext& ctx) {
 }
 
 bool CommandHandlers::timeout_delete(std::string_view key, Ringengine* engine) {
-    auto it = kvserver::expires_.getUnderlyingMap().find(key);
-    if(it != kvserver::expires_.getUnderlyingMap().end() && getCurrentTimestamp() >= it->second) {
+    auto it = engine->expires().getUnderlyingMap().find(key);
+    if(it != engine->expires().getUnderlyingMap().end() && getCurrentTimestamp() >= it->second) {
         engine->del(key);
-        kvserver::expires_.getUnderlyingMap().erase(it);
+        engine->expires().getUnderlyingMap().erase(it);
         return true;
     }
 
     return false;
 }
 
-bool CommandHandlers::timeout_delete_expire(std::string_view key) {
-    auto it = kvserver::expires_.getUnderlyingMap().find(key);
-    if(it != kvserver::expires_.getUnderlyingMap().end() && getCurrentTimestamp() >= it->second) {
-        kvserver::expires_.getUnderlyingMap().erase(it);
+bool CommandHandlers::timeout_delete_expire(std::string_view key, Ringengine* engine) {
+    auto it = engine->expires().getUnderlyingMap().find(key);
+    if(it != engine->expires().getUnderlyingMap().end() && getCurrentTimestamp() >= it->second) {
+        engine->expires().getUnderlyingMap().erase(it);
         return true;
     }
 
     return false;
 }
 
-void CommandHandlers::timeout_delete(std::string_view key) {
-    auto it = kvserver::expires_.getUnderlyingMap().find(key);
-    kvserver::expires_.getUnderlyingMap().erase(it);
-}
+void CommandHandlers::timeout_exist_delete(std::string_view key, Ringengine* engine) {
+    auto it = engine->expires().getUnderlyingMap().find(key);
 
-void CommandHandlers::timeout_exist_delete(std::string_view key) {
-    auto it = kvserver::expires_.getUnderlyingMap().find(key);
-
-    if(it != kvserver::expires_.getUnderlyingMap().end()) {
-        kvserver::expires_.getUnderlyingMap().erase(it);
+    if(it != engine->expires().getUnderlyingMap().end()) {
+        engine->expires().getUnderlyingMap().erase(it);
     }
-}
-
-bool CommandHandlers::timeout_exist(std::string_view key) {
-    auto it = kvserver::expires_.getUnderlyingMap().find(key);
-
-    return it != kvserver::expires_.getUnderlyingMap().end();
 }
 
 void CommandHandlers::flushallCommand(CommandContext& ctx) {
@@ -228,12 +216,12 @@ void CommandHandlers::flushallCommand(CommandContext& ctx) {
         if(loop == ctx.curr_loop_) continue;
 
         loop->runInLoop([engine] () {
-            kvserver::expires_.getUnderlyingMap().clear();
+            engine->expires().getUnderlyingMap().clear();
             engine->flushall();
         });
     }
 
-    kvserver::expires_.getUnderlyingMap().clear();
+    ctx.engine_->expires().getUnderlyingMap().clear();
     ctx.engine_->flushall();
 
     ctx.response_ = OKSTR;
@@ -258,7 +246,7 @@ void CommandHandlers::expireCommand(CommandContext& ctx) {
         auto opt_time = string2int(value);
         int time = opt_time.value();
 
-        kvserver::expires_.getUnderlyingMap()[std::string(key)] = getCurrentTimestamp() + time * 1000;
+        ctx.engine_->expires().getUnderlyingMap()[std::string(key)] = getCurrentTimestamp() + time * 1000;
     }
 
     ctx.response_ = ":" + std::to_string(result) + "\r\n";
@@ -276,7 +264,7 @@ void CommandHandlers::setCommand(CommandContext& ctx) {
     std::string_view key = ctx.tokens_[1];
     std::string_view value = ctx.tokens_[2];
 
-    timeout_exist_delete(key);
+    timeout_exist_delete(key, ctx.engine_);
 
     int ret = ctx.engine_->set(key, value);
     if(ret >= 0) {
@@ -293,7 +281,7 @@ void CommandHandlers::setnxCommand(CommandContext& ctx) {
     std::string_view key = ctx.tokens_[1];
     std::string_view value = ctx.tokens_[2];
 
-    if(timeout_delete_expire(key)) {
+    if(timeout_delete_expire(key, ctx.engine_)) {
         int ret = ctx.engine_->set(key, value);
         if(ret >= 0) {
             ctx.success_ = true;
@@ -429,7 +417,7 @@ void CommandHandlers::incrCommand(CommandContext& ctx) {
     std::string_view key = ctx.tokens_[1];
     long long newVal{0};
 
-    if(timeout_delete_expire(key)) {
+    if(timeout_delete_expire(key, ctx.engine_)) {
         newVal = 1;
 
         RedisObject* obj = ctx.engine_->get(key);
@@ -494,7 +482,7 @@ void CommandHandlers::incrbyCommand(CommandContext& ctx) {
         return;
     }
 
-    if(timeout_delete_expire(key)) {
+    if(timeout_delete_expire(key, ctx.engine_)) {
         newVal = increment;
 
         RedisObject* obj = ctx.engine_->get(key);
@@ -550,7 +538,7 @@ void CommandHandlers::decrCommand(CommandContext& ctx) {
     std::string_view key = ctx.tokens_[1];
     long long newVal{0};
 
-    if(timeout_delete_expire(key)) {
+    if(timeout_delete_expire(key, ctx.engine_)) {
         newVal = -1;
 
         RedisObject* obj = ctx.engine_->get(key);
@@ -616,7 +604,7 @@ void CommandHandlers::decrbyCommand(CommandContext& ctx) {
         return;
     }
 
-    if(timeout_delete_expire(key)) {
+    if(timeout_delete_expire(key, ctx.engine_)) {
         newVal = decrement;
 
         RedisObject* obj = ctx.engine_->get(key);
@@ -935,7 +923,7 @@ void CommandHandlers::zaddCommand(CommandContext& ctx) {
         }
     };
 
-    if(timeout_delete_expire(key)) {
+    if(timeout_delete_expire(key, ctx.engine_)) {
         RedisObject* obj = ctx.engine_->getMeta(key);
         if(obj->type != OBJ_ZSET) {
             ctx.success_ = false;
